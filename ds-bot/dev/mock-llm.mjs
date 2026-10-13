@@ -286,14 +286,10 @@ function decide(body) {
     if (isMain) {
       return [
         text(`嘿，我是 ${me}。从今天起我来管你的 Bot 团队，需要拍板的事找我就行。`),
-        text('现在还只有我一个。我先摸清你每天用的工具，再决定先上谁。'),
-        tool('ask_user', { question: '先让团队帮你做哪块？', options: ['整理日常事务', '做一次调研', '规划这一周', '先看看再说'] }),
+        text('现在还只有我一个。我先摸清你每天用的工具，再决定先上谁。先让团队帮你做哪块？'),
       ]
     }
-    return [
-      text(`Hi, I'm ${me}. Where should I start?`),
-      tool('ask_user', { question: 'Where should we start?', options: ['Review what exists', 'Plan this week', 'Start a first draft', 'Something else'], allowCustom: true }),
-    ]
+    return [text(`Hi, I'm ${me}. Where should I start?`)]
   }
   if (/^\[Group chat "[^"]*" · replies to your post\]/.test(userText)) {
     const replies = userText.split('\n').filter(line => /^[^:\n]{1,40}: /.test(line)).length

@@ -174,11 +174,12 @@ await step('bootstrap: Chief waits for a model', () => api('state'), (value, cal
     ?? expect(models.length > 0, 'no models listed for the model card')
 })
 
-await step('user picks a model; Chief greets and asks', () => api('update-bot', { id: chief().id, model: models.at(-1).ref }), () => {
+await step('user picks a model; Chief greets and asks in its reply', () => api('update-bot', { id: chief().id, model: models.at(-1).ref }), (_value, calls) => {
   const current = state()
   return expect(chief().model === models.at(-1).ref, `Chief runs on ${chief().model}`)
     ?? expect(chief().kickoff === undefined, 'the greeting is still held')
-    ?? expect(current.questions?.[chief().sessionId ?? chief().id], 'expected Chief to leave a question card')
+    ?? expect(!current.questions?.[chief().sessionId ?? chief().id], 'the greeting should not leave a question card')
+    ?? expect(saidText(calls, /先让团队帮你做哪块/), 'expected Chief to ask in its reply')
 })
 
 await step('Chief creates Writer, who replies', () => send(chief().id, '创建一个叫Writer的bot'), () => {
