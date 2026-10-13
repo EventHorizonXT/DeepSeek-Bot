@@ -3946,12 +3946,12 @@ function GroupEvent({ prefix, room: room2, name, roster, actions }) {
 }
 function MemoryEvent({ sessionId, scope, result, roster, actions, findBot }) {
   if (!/^(Saved to|Updated in|Removed from) /.test(result)) return null;
-  const self2 = roster.byId[sessionId];
+  const self = roster.byId[sessionId];
   const team = /^(team|团队|共享)$/i.test(String(scope ?? "").trim());
   const other = team || !scope ? void 0 : findBot(scope);
-  const target = other && other.id !== self2?.id ? other : self2;
+  const target = other && other.id !== self?.id ? other : self;
   if (!target) return null;
-  const label = team ? t("Team memory updated") : target === self2 ? t("Memory updated") : t("Updated {name}'s memory", { name: target.name });
+  const label = team ? t("Team memory updated") : target === self ? t("Memory updated") : t("Updated {name}'s memory", { name: target.name });
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-event" },
@@ -4220,7 +4220,7 @@ var TOOL_PHRASES = [
   [/image|photo|draw/i, "Working on an image"]
 ];
 var GROUP_PHRASES = { create_group: "Creating a group", update_group: "Updating the group", delete_group: "Deleting the group", post_to_group: "Posting in the group" };
-function toolActivity(name, arg, findBot, self2) {
+function toolActivity(name, arg, findBot, self) {
   switch (name) {
     case "ask_user":
       return null;
@@ -4243,7 +4243,7 @@ function toolActivity(name, arg, findBot, self2) {
     case "create_bot":
       return { label: t("Creating {name}", { name: arg("name") ?? t("a Bot") }), state: "sending" };
     case "update_bot": {
-      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self2);
+      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self);
       return { label: t("Updating {name}", { name: target?.name ?? t("a Bot") }), state: "sending" };
     }
     case "list_bots":
@@ -4376,27 +4376,35 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     })
   );
 }
-function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
-  const roster = useRoster((value) => value);
-  const root = node.data.root;
-  const done = root.kind === "tool-result";
-  const turn = node.location?.turn?.turn ?? root.turn;
-  const hidden = isHiddenTurn(roster, sessionId, turn);
-  const tool = toolName(root);
-  const { text: arg, value: argValue } = toolArgs(root);
-  const findBot = (nameOrId) => roster.byId[nameOrId] ?? roster.bots.find((bot) => bot.name.toLowerCase() === String(nameOrId ?? "").toLowerCase());
-  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot, roster.byId[sessionId]));
-  if (hidden) return null;
+var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "read_group_chat", "remember", "forget"]);
+function callTree(root) {
+  const calls = [];
+  const seen = /* @__PURE__ */ new Set();
+  const visit = (call2) => {
+    const id = call2.callId ?? call2;
+    if (seen.has(id)) return;
+    seen.add(id);
+    calls.push(call2);
+    for (const child of call2.subCalls ?? []) visit(child);
+  };
+  visit(root);
+  return calls;
+}
+function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot }) {
+  const tool = toolName(call2);
+  const done = call2.kind === "tool-result";
+  const { text: arg, value: argValue } = toolArgs(call2);
+  const self = roster.byId[sessionId];
   switch (tool) {
     case "message_bot": {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
-      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
+      if (done && call2.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
       return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
     }
     case "stop_bot": {
       const target = findBot(arg("bot")) ?? { name: arg("bot") ?? "…", color: "gray" };
-      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't stop {name}", { name: target.name }));
-      return (0, import_react6.createElement)(EventLine, { prefix: t("Stopped"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true });
+      if (done && call2.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't stop {name}", { name: target.name }));
+      return (0, import_react6.createElement)(EventLine, { prefix: t("Stopped"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
     }
     case "create_bot": {
       const created = findBot(arg("name"));
@@ -4404,11 +4412,11 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
       return (0, import_react6.createElement)(EventLine, { prefix: t("Created"), bots: [created], onOpen: (bot) => actions.openSession(bot.id) });
     }
     case "update_bot": {
-      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : roster.byId[sessionId]);
+      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self);
       return done && target ? (0, import_react6.createElement)(EventLine, { prefix: t("Updated"), bots: [target], onOpen: (bot) => actions.openSession(bot.id) }) : null;
     }
     case "group_relay":
-      return (0, import_react6.createElement)(GroupReplies, { sessionId, callId: root.callId, done, content: root.content, roster, actions, useUi, useWork });
+      return (0, import_react6.createElement)(GroupReplies, { sessionId, callId: call2.callId, done, content: call2.content, roster, actions, useUi, useWork });
     case "create_group":
     case "update_group":
     case "delete_group":
@@ -4420,25 +4428,25 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
         post_to_group: ["Posted in", "Couldn't post in the group"]
       }[tool];
       if (!done) return null;
-      const result = contentText(root.content);
+      const result = contentText(call2.content);
       const named = /^(Created group|Updated|Nothing changed in|Deleted|Posted in) "([^"]+)"/.exec(result);
-      if (root.isError || !named) return (0, import_react6.createElement)("div", { className: "bt-event", title: result }, t(verbs[1]));
+      if (call2.isError || !named) return (0, import_react6.createElement)("div", { className: "bt-event", title: result }, t(verbs[1]));
       const name = named[2];
       const room2 = roster.rooms.find((entry) => entry.name === name);
       return (0, import_react6.createElement)(GroupEvent, { prefix: t(verbs[0]), room: tool === "delete_group" ? void 0 : room2, name, roster, actions });
     }
     case "ask_user": {
       const question = roster.questions?.[sessionId];
-      if (!question || question.callId !== root.callId) return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
+      if (!question || question.callId !== call2.callId) return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
       return (0, import_react6.createElement)(PendingQuestion, { sessionId, question, actions, inline: true });
     }
     case "request_secret":
-      return (0, import_react6.createElement)(SecretToolCell, { sessionId, callId: root.callId, name: arg("name"), done, content: root.content, roster, actions });
+      return (0, import_react6.createElement)(SecretToolCell, { sessionId, callId: call2.callId, name: arg("name"), done, content: call2.content, roster, actions });
     case "ask_user_question": {
       if (!done) return null;
       let parsed = null;
       try {
-        parsed = JSON.parse(contentText(root.content));
+        parsed = JSON.parse(contentText(call2.content));
       } catch {
         parsed = null;
       }
@@ -4454,10 +4462,25 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
     }
     case "remember":
     case "forget":
-      return done && !root.isError ? (0, import_react6.createElement)(MemoryEvent, { sessionId, scope: arg("scope"), result: contentText(root.content), roster, actions, findBot }) : null;
+      return done && !call2.isError ? (0, import_react6.createElement)(MemoryEvent, { sessionId, scope: arg("scope"), result: contentText(call2.content), roster, actions, findBot }) : null;
     default:
       return null;
   }
+}
+function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
+  const roster = useRoster((value) => value);
+  const root = node.data.root;
+  const turn = node.location?.turn?.turn ?? root.turn;
+  const hidden = isHiddenTurn(roster, sessionId, turn);
+  const findBot = (nameOrId) => roster.byId[nameOrId] ?? roster.bots.find((bot) => bot.name.toLowerCase() === String(nameOrId ?? "").toLowerCase());
+  const calls = hidden ? [] : callTree(root);
+  const drawn = calls.filter((call2) => DRAWN.has(toolName(call2)));
+  const running = root.kind === "tool-result" ? void 0 : calls.findLast((call2) => call2.kind !== "tool-result");
+  const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null;
+  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note);
+  if (drawn.length === 0) return null;
+  const env = { sessionId, roster, actions, useUi, useWork, findBot };
+  return (0, import_react6.createElement)(import_react6.Fragment, null, drawn.map((call2, index) => (0, import_react6.createElement)(import_react6.Fragment, { key: call2.callId ?? index }, renderCall(call2, env))));
 }
 
 // src/client/activity-row.js
@@ -5828,8 +5851,8 @@ var conversationOf = (roster, sessionId) => {
   if (!roster.ready) return null;
   const room2 = roster.roomsById[sessionId];
   if (room2) return { room: room2 };
-  const self2 = roster.byId[sessionId];
-  return self2 ? { self: self2 } : null;
+  const self = roster.byId[sessionId];
+  return self ? { self } : null;
 };
 function mentionRows(roster, sessionId, query = "") {
   const here = conversationOf(roster, sessionId);
