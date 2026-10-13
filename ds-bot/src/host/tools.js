@@ -7,6 +7,7 @@ import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
+const BLOCKING_QUESTION_TOOL = 'ask_user_question'
 const MODE_PARAM = {
   type: 'string',
   enum: ROOM_MODES,
@@ -438,6 +439,38 @@ export function install(rt) {
     },
   }))
 
+  // dsh's own question tool holds the turn open until the user answers, and every
+  // message from another Bot or a group round queues behind it. Bot Sessions ask
+  // through ask_user instead, so the tool is taken out of their tool list.
+  const hiddenQuestion = new WeakSet()
+  const hideBlockingQuestion = (agent) => {
+    if (agent === undefined || hiddenQuestion.has(agent) || !rt.isBotSession(agent.session?.id)) return
+    if (typeof agent.ctx?.tools?.restrict !== 'function') return
+    try {
+      // restrict() throws on a name this profile does not serve.
+      if (!ctx.tools.schemas(agent).some(schema => schema.name === BLOCKING_QUESTION_TOOL)) return
+      agent.ctx.tools.restrict({ deny: [BLOCKING_QUESTION_TOOL] })
+      hiddenQuestion.add(agent)
+    } catch (error) {
+      rt.warn('ds-bot: %s stays in the tool list of %s: %s', BLOCKING_QUESTION_TOOL, agent.session?.id, error)
+    }
+  }
+  // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the
+  // list is only trimmed once ds-bot resolves that Agent again; the guard refuses
+  // the tool in any Bot Session meanwhile.
+  ctx.tools.guard(exec => (exec.name === BLOCKING_QUESTION_TOOL && rt.isBotSession(exec.agent?.id)
+    ? `Bots cannot use ${BLOCKING_QUESTION_TOOL}. Ask with ask_user in your own chat, or ask in your reply.`
+    : undefined))
+  // Creation waits for this listener, so the Agent's first step already lacks the tool.
+  ctx.on('agent/created', async ({ agent }) => {
+    try {
+      await rt.load()
+      hideBlockingQuestion(agent)
+    } catch (error) {
+      rt.warn('ds-bot: hiding %s on agent/created failed: %s', BLOCKING_QUESTION_TOOL, error)
+    }
+  })
+
   ctx.tools.register(defineTool({
     name: 'list_capabilities',
     description: 'List shared MCP servers, skills, and packs, plus the capabilities attached to you.',
@@ -536,5 +569,5 @@ export function install(rt) {
     }))
   }
 
-  Object.assign(rt, { pickRoom })
+  Object.assign(rt, { pickRoom, hideBlockingQuestion })
 }
