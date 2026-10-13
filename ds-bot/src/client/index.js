@@ -2,7 +2,7 @@ import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
-import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
+import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
@@ -303,29 +303,6 @@ export function apply(ctx) {
       delete document.body.dataset.btMotion
       style.remove()
     }
-  }
-
-  // The user-bubble token rides with the conversation group, so a plain Session
-  // keeps dsh's own bubble colors while the Bot shell stays themed.
-  const installBubbleTokens = () => {
-    let release = null
-    let key = ''
-    const render = () => {
-      const snapshot = roster.getSnapshot()
-      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs
-      const themes = allThemes()
-      const id = themes[prefs.theme] ? prefs.theme : 'deepseek'
-      const next = `${id}|${registry.getSnapshot()}`
-      if (next === key) return
-      key = next
-      const drop = release
-      release = ctx.theme.overrideTokens('ds-bot: conversation', conversationTokens(themes[id]))
-      if (typeof drop === 'function') drop()
-    }
-    render()
-    const offRoster = roster.subscribe(render)
-    const offRegistry = registry.subscribe(render)
-    return () => { offRoster(); offRegistry(); if (typeof release === 'function') release() }
   }
 
   ctx.effect(() => {
@@ -789,7 +766,6 @@ export function apply(ctx) {
   ]
   const installConversation = () => [
     installCompiledStyles(CONVERSATION_CSS, 'conversation'),
-    installBubbleTokens(),
     installMentions(),
     installAtMenu(),
     // Bot conversations are always flat, so the work-details mode is not a choice:

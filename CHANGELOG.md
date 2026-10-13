@@ -4,6 +4,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Fixed
+
+- Your own messages in a Bot chat stay readable under dark skins that recolor message bubbles.
+
 ## [0.1.4] - 2026-10-13
 
 ### Added
