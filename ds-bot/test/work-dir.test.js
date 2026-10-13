@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
+import { dshHomeOf } from '../src/host/folders.js'
 import { escapeRegExp } from '../src/host/text.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -99,8 +100,8 @@ async function start({ services = {}, workspaces = [] } = {}) {
   }))).json()
   const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
   // Runs the parts check, registered last; 'next' means the step goes on.
-  const preStep = (sessionId, messages = []) => ctx.listeners.get('agent/pre-step').at(-1)(
-    { agent: agentOf(sessionId), messages, step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+  const preStep = (sessionId, messages = [], step = 1) => ctx.listeners.get('agent/pre-step').at(-1)(
+    { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   // Waits until the Bot's own chat runs in `dir` and its move has finished.
   const workingIn = async (botId, dir) => {
@@ -129,24 +130,35 @@ const until = async (check) => {
 const textOf = message => message.content.map(block => block.text ?? '').join('\n')
 const handoffOf = agent => agent.calls.filter(([kind, message]) => kind === 'followup' && message.source?.role === 'handoff').map(([, message]) => textOf(message)).at(-1)
 
-// Approvals that answer `outcome` and keep every request; Sessions write inside their
-// folder only.
-const approvalServices = (outcome, { policy = 'on-request' } = {}) => {
+// Approvals that answer `outcome` and keep every request. Sessions run in `mode`, the
+// default, unless `modes` names another for them; 'workspace-write' writes inside the
+// Session's folder only. Under the 'never' policy DSH answers 'rejected' without asking.
+const approvalServices = (outcome, { policy = 'on-request', mode = 'workspace-write', modes = {} } = {}) => {
   const requests = []
   return {
     requests,
     services: {
-      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write' }) },
+      sandboxPolicy: { resolve: ({ session } = {}) => ({ mode: modes[session?.id] ?? mode }) },
       approval: {
-        effectivePolicy: () => policy,
         request: async (request) => {
           requests.push(request)
-          return outcome
+          return policy === 'never' ? 'rejected' : outcome
         },
       },
     },
   }
 }
+const notAllowed = path => `Working in ${path} was not allowed, so nothing changed. The user can make this change in the settings.`
+
+test('DSH_HOME is read as DSH reads it', () => {
+  const dsh = join(homedir(), '.dsh')
+  assert.equal(dshHomeOf(undefined), dsh)
+  assert.equal(dshHomeOf('  '), dsh)
+  assert.equal(dshHomeOf('~'), homedir())
+  assert.equal(dshHomeOf('~/dsh-x'), join(homedir(), 'dsh-x'))
+  assert.equal(dshHomeOf('~\\dsh-x'), join(homedir(), 'dsh-x'))
+  assert.equal(dshHomeOf('dsh-x'), resolve('dsh-x'))
+})
 
 test('a working folder is a full path to a folder outside the DeepSeek Harness data', async (t) => {
   const { call, state, workingIn, dsh, home, team, root, project, stop } = await start()
@@ -229,9 +241,9 @@ test('a folder outside the team workspace needs the user\'s approval', async (t)
   const rejected = approvalServices('rejected')
   const first = await start({ services: rejected.services })
   t.after(first.stop)
-  assert.equal(await first.tool('update_bot', { work_dir: first.project }, 'b'), 'Could not update the Bot: The user did not allow this folder. Leave the folder as it is.')
+  assert.equal(await first.tool('update_bot', { work_dir: first.project }, 'b'), `Could not update the Bot: ${notAllowed(first.project)}`)
   assert.equal(first.state().bots.b.workDir, undefined)
-  assert.match(await first.tool('create_bot', { name: 'Builder', role: 'Build', instructions: 'Build', work_dir: first.project }, 'a'), /^Could not create the Bot: The user did not allow this folder/)
+  assert.equal(await first.tool('create_bot', { name: 'Builder', role: 'Build', instructions: 'Build', work_dir: first.project }, 'a'), `Could not create the Bot: ${notAllowed(first.project)}`)
   assert.deepEqual(first.created, [])
   // A folder inside the team workspace widens nothing, so nobody is asked.
   mkdirSync(join(first.team, 'site'))
@@ -242,7 +254,8 @@ test('a folder outside the team workspace needs the user\'s approval', async (t)
 
   const never = await start(approvalServices('allowed-once', { policy: 'never' }))
   t.after(never.stop)
-  assert.equal(await never.tool('update_bot', { work_dir: never.project }, 'b'), 'Could not update the Bot: Your approval settings do not let you ask the user, so you cannot set this folder. The user can set it in the settings.')
+  assert.equal(await never.tool('update_bot', { work_dir: never.project }, 'b'), `Could not update the Bot: ${notAllowed(never.project)}`)
+  assert.equal(never.state().bots.b.workDir, undefined)
 
   const allowed = approvalServices('allowed-once')
   const third = await start({ services: allowed.services })
@@ -263,8 +276,11 @@ test('a group\'s folder holds for every member there; only the user or a Main Bo
   assert.equal(requests.length, 0)
   assert.match(await tool('list_bots', {}, 'a'), new RegExp(`"Ops" — .*; members work in ${escapeRegExp(project)} here`))
 
-  // The member's group Session moves at its next turn there; its own chat stays.
+  // The member's group Session moves at its next turn there, not within a reply; its
+  // own chat stays.
   assert.equal(await preStep('b'), 'next')
+  assert.equal(await preStep('gb', [], 2), 'next')
+  assert.deepEqual(created, [])
   assert.deepEqual(await preStep('gb'), { kind: 'reject' })
   await until(() => state().rooms.r1.sessions.b === 's1')
   assert.deepEqual(created, [{ cwd: project }])
@@ -276,6 +292,48 @@ test('a group\'s folder holds for every member there; only the user or a Main Bo
   assert.equal(requests.length, 0)
   assert.match(await tool('update_group', { group: 'Ops', work_dir: project }, 'a'), /^Updated "Ops": every member now works in .* here\.$/)
   assert.equal(requests[0].displayReason.zh, `允许群聊「Ops」的成员在 ${project} 中工作吗？之后可以修改这个文件夹里的文件。`)
+})
+
+test('the approval counts every Session that would work in the folder', async (t) => {
+  // Writer's own chat and new Sessions only read; its conversation in Ops may write.
+  const group = approvalServices('allowed-once', { mode: 'read-only', modes: { gb: 'workspace-write' } })
+  const first = await start({ services: group.services })
+  t.after(first.stop)
+  assert.equal(await first.tool('update_bot', { bot: 'Writer', work_dir: first.project }, 'a'), `Updated Writer. It now works in ${first.project}.`)
+  assert.equal(group.requests.length, 1)
+  await first.workingIn('b', first.project)
+  assert.match(await first.tool('update_group', { group: 'Ops', work_dir: first.project }, 'a'), /^Updated "Ops": every member now works in /)
+  assert.equal(group.requests.length, 2)
+
+  // Nothing that would work there may write, so nobody is asked.
+  const reading = approvalServices('rejected', { mode: 'read-only' })
+  const second = await start({ services: reading.services })
+  t.after(second.stop)
+  assert.equal(await second.tool('update_bot', { bot: 'Writer', work_dir: second.project }, 'a'), `Updated Writer. It now works in ${second.project}.`)
+  assert.equal(reading.requests.length, 0)
+  await second.workingIn('b', second.project)
+
+  // Sessions made there later start under the default, so a default that writes asks.
+  const later = approvalServices('rejected', { modes: { a: 'read-only', b: 'read-only', gb: 'read-only' } })
+  const third = await start({ services: later.services })
+  t.after(third.stop)
+  assert.equal(await third.tool('update_bot', { bot: 'Writer', work_dir: third.project }, 'a'), `Could not update the Bot: ${notAllowed(third.project)}`)
+  assert.equal(later.requests.length, 1)
+})
+
+test('a Bot that joins a group with a folder needs the user\'s approval to work there', async (t) => {
+  const { requests, services } = approvalServices('rejected')
+  const { call, tool, project, state, stop } = await start({ services })
+  t.after(stop)
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  assert.equal((await call('create-bot', { name: 'Coder' })).ok, true)
+  assert.equal(await tool('update_group', { group: 'Ops', add_members: ['Coder'] }, 'a'), `Could not update "Ops": ${notAllowed(project)}`)
+  assert.deepEqual(state().rooms.r1.members, ['a', 'b'])
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].reason, `Let Coder work in ${project}? Files there can then be changed.`)
+  // Members already there are not asked again.
+  assert.equal(await tool('update_group', { group: 'Ops', add_members: ['Writer'], notice: 'Ship it' }, 'a'), 'Updated "Ops": updated the notice.')
+  assert.equal(requests.length, 1)
 })
 
 test('the folder menu lists DSH projects and the folders Bots use, but not the team workspace', async (t) => {

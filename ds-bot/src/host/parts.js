@@ -838,7 +838,7 @@ export function install(rt) {
       freshParts.delete(agent.id)
       partBase.set(agent.id, (tokensOf(agent.session) ?? 0) + fresh)
     }
-    if (!readOnly() && await folderMove(agent) !== undefined) return switchBeforeStep(agent, payload, { folder: true })
+    if (!readOnly() && await folderMove(agent, { midTurn: payload.step > 1 }) !== undefined) return switchBeforeStep(agent, payload, { folder: true })
     const lines = await contextLines(agent.session).catch(() => undefined)
     const tokens = tokensOf(agent.session)
     if (lines === undefined || tokens === undefined || tokens < lines.hard || !grown(agent.id, tokens, lines) || readOnly()) return next()
@@ -863,11 +863,12 @@ export function install(rt) {
 
   // The folder a part should move to, when it is not the one the part was made in. A
   // working folder that is gone counts as the team workspace, where a fresh part would
-  // start.
-  async function folderMove(agent) {
+  // start. A group reply ends where it began; the group conversation moves at its next
+  // turn there.
+  async function folderMove(agent, { midTurn = false } = {}) {
     const place = placeOf(agent.id)
     const cwd = agent.session.header?.cwd
-    if (place === undefined || cwd === undefined || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
+    if (place === undefined || cwd === undefined || (midTurn && place.roomId !== undefined) || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
     const wanted = rt.workDirOf(place)
     const target = wanted !== undefined && await rt.isFolder(wanted) ? wanted : rt.teamFolder()
     return target === undefined || target === cwd ? undefined : target

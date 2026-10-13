@@ -11,6 +11,12 @@ const PICK_TIMEOUT_MS = 10 * 60_000
 
 export const within = (inner, outer) => inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : outer + sep)
 
+const expandHome = text => (text === '~' ? homedir() : /^~[\\/]/.test(text) ? join(homedir(), text.slice(2)) : text)
+
+// Read as DSH reads it, so the team's data and the guarded folder are where DSH keeps
+// its own: a blank value counts as unset.
+export const dshHomeOf = value => resolve(expandHome(value?.trim() ? value : join(homedir(), '.dsh')))
+
 export function install(rt) {
   const { ctx, state } = rt
 
@@ -36,7 +42,7 @@ export function install(rt) {
   async function cleanWorkDir(input) {
     const text = unquote(input)
     if (text === '') return undefined
-    const expanded = text === '~' ? homedir() : /^~[\\/]/.test(text) ? join(homedir(), text.slice(2)) : text
+    const expanded = expandHome(text)
     if (!isAbsolute(expanded)) throw new Error(`Give the full path of the folder, not ${text}`)
     let path
     try {
@@ -49,21 +55,24 @@ export function install(rt) {
     return path === teamFolder() ? undefined : path
   }
 
+  // Every Session of a Bot: its own chat and its conversation in each of its groups.
+  const sessionsOfBot = botId => [rt.chatOf(botId), ...Object.values(state.rooms)
+    .filter(room => room.members.includes(botId)).map(room => room.sessions?.[botId])].filter(Boolean)
+
   // A folder outside the team workspace widens where a Bot may write, so a Bot that
   // sets one for Bots whose writes are bounded by their folder asks the user first.
-  // `sessions` are the Sessions that would move; undefined stands for a Bot not made yet.
-  // Throws when the user does not allow it.
-  async function approveFolder(exec, { path, sessions, who }) {
+  // `sessions` are the Sessions that would work there; the default policy counts too,
+  // since the Sessions made there later start under it. Throws when it is not allowed.
+  async function approveFolder(exec, { path, sessions = [], who }) {
     const team = teamFolder()
     const policy = ctx.get?.('sandboxPolicy')
     if (path === undefined || (team !== undefined && within(path, team)) || policy === undefined) return
-    const modes = sessions === undefined ? [policy.resolve().mode]
-      : await Promise.all(sessions.map(async id => policy.resolve({ session: (await rt.resolveAgent(id)).session }).mode))
+    const agents = await Promise.all(sessions.map(id => rt.resolveAgent(id)))
+    const modes = [policy.resolve(), ...agents.map(agent => policy.resolve({ session: agent.session }))].map(entry => entry.mode)
     if (!modes.includes('workspace-write')) return
     const approval = ctx.get?.('approval')
     const agent = exec.agent
-    if (approval === undefined || agent?.session === undefined) throw new Error('Setting this folder needs the user\'s approval, and there is no way to ask for it here. The user can set the folder in the settings.')
-    if (approval.effectivePolicy?.(agent.session) === 'never') throw new Error('Your approval settings do not let you ask the user, so you cannot set this folder. The user can set it in the settings.')
+    if (approval === undefined || agent?.session === undefined) throw new Error(`Working in ${path} needs the user's approval, and there is no way to ask for it here, so nothing changed. The user can make this change in the settings.`)
     const outcome = await approval.request({
       agent,
       toolName: exec.name,
@@ -73,9 +82,10 @@ export function install(rt) {
       ...(exec.signal ? { signal: exec.signal } : {}),
     })
     if (outcome === 'allowed-once') return
-    throw new Error(outcome === 'rejected' ? 'The user did not allow this folder. Leave the folder as it is.'
-      : outcome === 'cancelled' ? 'The approval was cancelled, so the folder stays as it is.'
-        : 'Setting this folder needs the user\'s approval, and no one could answer. The user can set the folder in the settings.')
+    // An approval policy that never asks answers 'rejected' as well.
+    throw new Error(outcome === 'rejected' ? `Working in ${path} was not allowed, so nothing changed. The user can make this change in the settings.`
+      : outcome === 'cancelled' ? 'The approval was cancelled, so nothing changed.'
+        : `Working in ${path} needs the user's approval, and no one could answer, so nothing changed. The user can make this change in the settings.`)
   }
 
   const picker = () => {
@@ -121,5 +131,5 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { teamFolder, workDirOf, isFolder, cleanWorkDir, approveFolder, folderEndpoint })
+  Object.assign(rt, { teamFolder, workDirOf, isFolder, cleanWorkDir, sessionsOfBot, approveFolder, folderEndpoint })
 }

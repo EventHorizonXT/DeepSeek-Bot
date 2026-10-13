@@ -205,7 +205,7 @@ export function install(rt) {
         const { name: newName, role, instructions, color, model } = args
         const moving = typeof args.work_dir === 'string'
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
-        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: [rt.chatOf(bot.id)], who: { en: bot.name, zh: ` ${bot.name} ` } })
+        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
         const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}), ...(moving ? { workDir: workDir ?? '' } : {}) })
         if (!moving) return `Updated ${next.name}.`
         const folder = workDir ?? 'the team workspace'
@@ -317,9 +317,14 @@ export function install(rt) {
       }
       try {
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
+        // A Bot that joins a group with a folder works there from its first turn.
+        const joining = add.bots.filter(bot => !room.members.includes(bot.id))
         if (moving && workDir !== room.workDir) {
-          const members = [...new Set([...room.members, ...add.bots.map(bot => bot.id)])]
-          await rt.approveFolder(exec, { path: workDir, sessions: members.map(id => rt.chatOf(id)), who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
+          const members = [...room.members, ...joining.map(bot => bot.id)]
+          await rt.approveFolder(exec, { path: workDir, sessions: members.map(id => room.sessions?.[id]).filter(Boolean), who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
+        } else if (joining.length > 0) {
+          const names = joining.map(bot => bot.name)
+          await rt.approveFolder(exec, { path: room.workDir, sessions: joining.map(bot => room.sessions?.[bot.id]).filter(Boolean), who: { en: names.join(', '), zh: ` ${names.join('、')} ` } })
         }
         const { room: next, changes } = await rt.updateRoom(room.id, {
           name: args.name,
