@@ -1331,9 +1331,6 @@ var shellTokens = ({ light, dark }) => ({
   "--dsw-alias-label-secondary": { light: rgba(light.text, 0.74), dark: rgba(dark.text, 0.74) },
   "--dsw-alias-label-tertiary": { light: rgba(light.text, 0.6), dark: rgba(dark.text, 0.6) }
 });
-var conversationTokens = ({ light, dark }) => ({
-  "--dsw-specific-bubble": { light: light.user, dark: dark.user }
-});
 var customThemes = {};
 var registry = createSource(0);
 var isPoint = (point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
@@ -2596,11 +2593,13 @@ var CONVERSATION_CSS = `
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}
 .bt-group-replies{display:contents}
-/* The plugin holds the work-details mode at verbose, which renders no step groups.
-   These rules keep every group flat anyway: before that write lands, when the Host
-   refuses it, or on a page whose settings stay process-local. */
+/* A Bot chat is flat in every work-details mode, without changing the user's mode
+   (it is a DSH-wide setting): step groups lose their header and stay open, and what a
+   mode folds away in a finished turn stays shown. TurnProcessCell also opens that
+   fold; these rules cover the first frame before it does. */
 [data-step-process]>div:first-child{display:none!important}
 [data-step-process]>[data-step-process-body]{display:block!important;content-visibility:visible!important;max-height:none!important;overflow:visible!important;mask-image:none!important;scrollbar-gutter:auto!important}
+:is([data-step-process],[data-turn-process-hidden])[hidden]{content-visibility:visible!important}
 [class*="_flowItem"]:has(> [data-slot="conversation.chat.node"]:empty){display:none!important}
 [class*="_header"]:has(.bt-head){border-bottom-color:transparent!important;box-shadow:none!important}
 /* The transcript runs under a floating header pill. */
@@ -2609,6 +2608,10 @@ header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inse
 header[class*="_header"]:has(.bt-head)>[class*="_headerLeading"]{position:absolute;left:12px;top:10px;pointer-events:auto}
 header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [class*="_body"]:has(> [class*="_scrollBody"]){--dsh-chat-content-width:min(960px,100%)}
+/* DSH's turn tail keeps what plugins put in it (delivered files, the Bot's separators),
+   without its copy and branch row; a tail with nothing in it takes no room. */
+[data-turn-tail]>:not([data-slot="conversation.chat.turnTail"]){display:none!important}
+[class*="_flowItem"][data-chat-flow-kind="turn-tail"]:not(:has([data-slot="conversation.chat.turnTail"]:not(:empty))){display:none!important}
 /* Every team Session belongs to a Bot or a group, so a blank one is an empty chat, not
    the shell's new-session hero: no headline, no workspace or mode picker, and the
    composer stays docked at the bottom. */
@@ -2703,9 +2706,10 @@ body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) 
 [data-chain-overlay-fallback="conversation.composer"]:has(~ .bt-q){display:block!important;order:2}
 .bt-q{order:1}
 div:has(> nav [class*="_marks"]){display:none!important}
-/* The theme paints --dsw-specific-bubble in the user color, and that token backs every
-   user-side bubble: sent, steering mid-turn, not yet admitted, question replies. */
-[class*="_userRow"] [class*="_bubble"],[data-chat-flow-kind=question-reply] [class*="_bubble"],[data-chat-flow-kind=command-input] [class*="_bubble"]{color:var(--bt-user-ink)!important;border-radius:18px!important;padding:7px 12px!important;font-size:var(--dsh-content-font-size,14px)!important;line-height:calc(var(--dsh-content-font-size,14px) + 8px)!important}
+/* Every user-side bubble (sent, steering mid-turn, not yet admitted, question replies)
+   takes its surface and its text from the one --bt-user pair: a skin that repaints
+   the host's bubble surface alone would otherwise leave the text unreadable. */
+[class*="_userRow"] [class*="_bubble"],[data-chat-flow-kind=question-reply] [class*="_bubble"],[data-chat-flow-kind=command-input] [class*="_bubble"]{background:var(--bt-user)!important;color:var(--bt-user-ink)!important;border-radius:18px!important;padding:7px 12px!important;font-size:var(--dsh-content-font-size,14px)!important;line-height:calc(var(--dsh-content-font-size,14px) + 8px)!important}
 [class*="_userRow"] [class*="_bubble"] [class*="_markdown"],[class*="_userRow"] [class*="_bubble"] a{color:inherit}
 /* Sent messages get the hover toolbar below; steering and unsent bubbles keep none. */
 [class*="_userRow"] [class*="_actions"]{display:none!important}
@@ -3745,7 +3749,7 @@ var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
-function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions }) {
   const onClick = (event) => {
     const target = mentionTarget(event);
     if (target === null) return;
@@ -3772,7 +3776,7 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
           (0, import_react6.createElement)(
             "div",
             { className: "bt-bubble" },
-            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact" })
+            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact", fileMentions: mentions })
           ),
           live ? null : (0, import_react6.createElement)(MessageTools, { text, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions })
         ),
@@ -3873,11 +3877,22 @@ function ThinkingRow({ text }) {
     (0, import_react6.createElement)("div", { className: "bt-think-text" }, text)
   );
 }
-function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
+function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
+  const tail = useTurnData?.("turn-tail");
+  const location2 = node.location;
+  const turn = location2?.kind === "turn" || location2?.kind === "step" ? location2.turn : void 0;
+  const seq = node.data.finalNode?.seq;
+  return (0, import_react6.useMemo)(() => {
+    if (typeof fileMentions !== "function" || turn?.status !== "closed" || seq === void 0) return void 0;
+    return tail?.closing?.finalNode.seq === seq ? fileMentions({ turn, seq, openFile }) : void 0;
+  }, [fileMentions, openFile, seq, tail, turn]);
+}
+function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
   const steps = useTurnSteps(String(data.turn));
   const contexts = useTurnContext(String(data.turn));
+  const mentions = useFileMentions({ node, openFile, fileMentions, useTurnData });
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
@@ -3904,7 +3919,7 @@ function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSt
       });
     }),
     reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
-    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, mentions }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
@@ -4196,19 +4211,20 @@ function openingTurn(turns, firstTurns, hiddenTurns) {
   return listed.includes(turn) && earlier.every((entry) => hiddenTurns?.includes(entry)) ? { turn, start } : null;
 }
 var unseenSince = (visit, time) => typeof visit?.seen === "number" && time > visit.seen && time <= visit.entered;
-function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
-  const data = node.data;
+function TurnTailCell({ turn: location2, sessionId, useTurnClock, useUi, actions }) {
+  const turn = location2.turn;
+  const time = location2.end.time;
   (0, import_react6.useEffect)(() => {
-    actions.noteTurnTime(sessionId, data.turn, "end", data.time);
-  }, [sessionId, data.turn, data.time]);
+    actions.noteTurnTime(sessionId, turn, "end", time);
+  }, [sessionId, turn, time]);
   const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn);
-    return start !== void 0 && start - data.time >= SEPARATOR_GAP_MS ? clockLabel(start) : "";
+    const start = nextTurnStart(state[sessionId] ?? {}, turn);
+    return start !== void 0 && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : "";
   });
   const visit = useUi((state) => state.visits?.[sessionId]);
   const fresh = useTurnClock((state) => {
-    if (typeof visit?.seen !== "number" || data.time > visit.seen) return false;
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn);
+    if (typeof visit?.seen !== "number" || time > visit.seen) return false;
+    const start = nextTurnStart(state[sessionId] ?? {}, turn);
     return start !== void 0 && start > visit.seen && start <= visit.entered;
   });
   if (!label && !fresh) return null;
@@ -12826,26 +12842,43 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
   };
 }
 
-// src/client/flat-transcript.js
-var FLAT_TRANSCRIPT_VIEW = "verbose";
-function holdFlatTranscript(form) {
-  let tried;
-  const check = () => {
-    const snapshot = form.getSnapshot();
-    if (snapshot.status !== "ready" || snapshot.value === void 0 || !snapshot.writable) return;
-    if (snapshot.value.transcriptView === FLAT_TRANSCRIPT_VIEW) return;
-    if (tried === snapshot.revision) return;
-    tried = snapshot.revision;
-    void Promise.resolve(form.set("transcriptView", FLAT_TRANSCRIPT_VIEW)).catch(() => {
-    });
-  };
-  check();
-  return form.subscribe(check);
-}
-
 // src/client/surface.js
 function groupsFor({ mode, plain = false }) {
   return { shell: mode === "bot", conversation: mode === "bot" && !plain };
+}
+var GROUPS = ["shell", "conversation"];
+function disposeAll(disposers, label) {
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      dispose?.();
+    } catch (error) {
+      console.warn(`[ds-bot] ${label}`, error);
+    }
+  }
+}
+function surfaceGroups(install) {
+  const mounted = { shell: [], conversation: [] };
+  const withdraw = (group) => {
+    const disposers = mounted[group];
+    mounted[group] = [];
+    disposeAll(disposers, `withdraw ${group}`);
+  };
+  return {
+    reconcile(wanted) {
+      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
+      for (const group of GROUPS) {
+        if (!wanted[group] || mounted[group].length > 0) continue;
+        try {
+          mounted[group] = install[group]();
+        } catch (error) {
+          console.warn(`[ds-bot] install ${group}`, error);
+        }
+      }
+    },
+    dispose() {
+      for (const group of [...GROUPS].reverse()) withdraw(group);
+    }
+  };
 }
 function readMode(storage = globalThis.localStorage) {
   try {
@@ -12956,7 +12989,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
 var USER_MESSAGE_CSS = `
 .bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px}
 .bt-ustack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702),82%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--dsw-specific-bubble,var(--bt-user));color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
+.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}
 .bt-umention:hover{text-decoration:underline;text-underline-offset:2px}
@@ -13005,7 +13038,7 @@ function noticeApprovals({ work, roster, shownSession, openSession, since: since
 }
 
 // src/client/index.js
-var inject = ["sessions", "uiWorkspace", "uiConversation", "slots", "theme", "layout", "configForms"];
+var inject = ["sessions", "uiWorkspace", "uiConversation", "slots", "theme", "layout"];
 function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
   const roster = createSource(EMPTY_ROSTER);
@@ -13297,33 +13330,12 @@ function apply(ctx) {
     return () => {
       offRoster();
       offRegistry();
-      if (typeof releaseTokens === "function") releaseTokens();
-      delete document.body.dataset.btMotion;
-      style.remove();
-    };
-  };
-  const installBubbleTokens = () => {
-    let release = null;
-    let key = "";
-    const render = () => {
-      const snapshot = roster.getSnapshot();
-      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs;
-      const themes = allThemes();
-      const id = themes[prefs.theme] ? prefs.theme : "deepseek";
-      const next = `${id}|${registry.getSnapshot()}`;
-      if (next === key) return;
-      key = next;
-      const drop = release;
-      release = ctx.theme.overrideTokens("ds-bot: conversation", conversationTokens(themes[id]));
-      if (typeof drop === "function") drop();
-    };
-    render();
-    const offRoster = roster.subscribe(render);
-    const offRegistry = registry.subscribe(render);
-    return () => {
-      offRoster();
-      offRegistry();
-      if (typeof release === "function") release();
+      try {
+        if (typeof releaseTokens === "function") releaseTokens();
+      } finally {
+        delete document.body.dataset.btMotion;
+        style.remove();
+      }
     };
   };
   ctx.effect(() => {
@@ -13809,8 +13821,6 @@ function apply(ctx) {
     shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
     shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
     shadow("settings.trigger", { priority: -10 }, YouAvatar),
-    // ui-chat's "Transcript view" row: a lower priority on the same list id shadows it.
-    shadow("settings.general.item", { id: "transcript-view", priority: -10 }, Nothing),
     // At priority -10 the whale wins the seat over a shell account plugin's own
     // launcher (the Desktop's "··· More"), which comes back in Agent mode.
     shadow("settings.launcher", { priority: -10, inject: face }, AccountLauncher),
@@ -13820,18 +13830,16 @@ function apply(ctx) {
   ];
   const installConversation = () => [
     installCompiledStyles(CONVERSATION_CSS, "conversation"),
-    installBubbleTokens(),
     installMentions(),
     installAtMenu(),
-    // Bot conversations are always flat, so the work-details mode is not a choice:
-    // the mode is held at `verbose` while this group is mounted.
-    holdFlatTranscript(ctx.configForms.get("ui-chat")),
     shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
     shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
-    shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: face }, TurnTailCell),
+    // DSH's own turn tail stays, so what other plugins add there shows, such as the
+    // cards of the files a turn delivered; its copy and branch row is hidden.
+    shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),
@@ -13906,26 +13914,13 @@ function apply(ctx) {
     };
   }, "ds-bot: agent surface");
   ctx.effect(() => {
-    const mounted = { shell: [], conversation: [] };
-    const reconcile = () => {
-      const wanted = groupsFor(surface.getSnapshot());
-      for (const group of ["shell", "conversation"]) {
-        if (wanted[group] === mounted[group].length > 0) continue;
-        if (wanted[group]) mounted[group] = (group === "shell" ? installShell : installConversation)();
-        else {
-          for (const dispose of mounted[group]) dispose?.();
-          mounted[group] = [];
-        }
-      }
-    };
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation });
+    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
     const unsub = surface.subscribe(reconcile);
     return () => {
       unsub();
-      for (const group of ["shell", "conversation"]) {
-        for (const dispose of mounted[group]) dispose?.();
-        mounted[group] = [];
-      }
+      groups.dispose();
     };
   }, "ds-bot: surface");
 }

@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
@@ -18,7 +18,7 @@ const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied')
 
 // `lead` (a sender avatar in group chats) sits beside the last bubble, in the same
 // row, so it lines up with the bubble whether or not reactions hang below it.
-export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions }) {
   const onClick = (event) => {
     const target = mentionTarget(event)
     if (target === null) return
@@ -37,7 +37,7 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
         h('div', { className: 'bt-msg-line' },
           lead && last ? lead : null,
           h('div', { className: 'bt-bubble' },
-            h(MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact' })),
+            h(MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })),
           live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })),
         picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
           key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
@@ -106,11 +106,25 @@ function ThinkingRow({ text }) {
     h('div', { className: 'bt-think-text' }, text))
 }
 
-export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
+// The files a finished turn changed or delivered, linked from inline code in its
+// reply as in DSH's own chat. DSH resolves them for the step that closes the turn.
+function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
+  const tail = useTurnData?.('turn-tail')
+  const location = node.location
+  const turn = location?.kind === 'turn' || location?.kind === 'step' ? location.turn : undefined
+  const seq = node.data.finalNode?.seq
+  return useMemo(() => {
+    if (typeof fileMentions !== 'function' || turn?.status !== 'closed' || seq === undefined) return undefined
+    return tail?.closing?.finalNode.seq === seq ? fileMentions({ turn, seq, openFile }) : undefined
+  }, [fileMentions, openFile, seq, tail, turn])
+}
+
+export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
   const steps = useTurnSteps(String(data.turn))
   const contexts = useTurnContext(String(data.turn))
+  const mentions = useFileMentions({ node, openFile, fileMentions, useTurnData })
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
@@ -137,7 +151,7 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
       })
     }),
     reasoning ? h(ThinkingRow, { text: reasoning }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, mentions }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -431,21 +445,24 @@ export function openingTurn(turns, firstTurns, hiddenTurns) {
 // Began after the user last left the conversation and before this visit opened it.
 export const unseenSince = (visit, time) => typeof visit?.seen === 'number' && time > visit.seen && time <= visit.entered
 
-// A turn's tail sits right before the next turn's first row, so the separator for a
-// pause between turns renders here.
-export function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
-  const data = node.data
-  useEffect(() => { actions.noteTurnTime(sessionId, data.turn, 'end', data.time) }, [sessionId, data.turn, data.time])
+// An entry in DSH's own turn tail, after what other plugins put there (the cards of
+// the files a turn delivered). The tail sits right before the next turn's first row,
+// so the separator for a pause between turns renders here.
+export function TurnTailCell({ turn: location, sessionId, useTurnClock, useUi, actions }) {
+  const turn = location.turn
+  // DSH builds the tail from the turn's end, so it is there.
+  const time = location.end.time
+  useEffect(() => { actions.noteTurnTime(sessionId, turn, 'end', time) }, [sessionId, turn, time])
   const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
-    return start !== undefined && start - data.time >= SEPARATOR_GAP_MS ? clockLabel(start) : ''
+    const start = nextTurnStart(state[sessionId] ?? {}, turn)
+    return start !== undefined && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : ''
   })
   // The unread divider sits before the first turn that began after the last visit;
   // turns that begin while the conversation is open were watched live.
   const visit = useUi(state => state.visits?.[sessionId])
   const fresh = useTurnClock((state) => {
-    if (typeof visit?.seen !== 'number' || data.time > visit.seen) return false
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
+    if (typeof visit?.seen !== 'number' || time > visit.seen) return false
+    const start = nextTurnStart(state[sessionId] ?? {}, turn)
     return start !== undefined && start > visit.seen && start <= visit.entered
   })
   if (!label && !fresh) return null
