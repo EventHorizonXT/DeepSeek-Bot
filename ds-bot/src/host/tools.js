@@ -13,6 +13,7 @@ const MODE_PARAM = {
   enum: ROOM_MODES,
   description: '"everyone": every member answers a plain message in turn, admin first. "admin" (the default): a plain message goes to the admin, who calls others with @Name. @mentions always choose who answers.',
 }
+const WORK_DIR_PARAM = { type: 'string', description: 'Full path of the folder to work in, where commands and file tools start. Only when the user asks for it' }
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -30,6 +31,7 @@ export function install(rt) {
       `members: ${members.join(', ')}`,
       room.mode === 'admin' && room.admin ? 'plain messages go to the admin first' : 'every member replies in turn',
       room.notice ? `notice: ${room.notice.split('\n')[0].slice(0, 100)}` : '',
+      room.workDir ? `members work in ${room.workDir} here` : '',
     ].filter(Boolean)
     return `- "${room.name}" — ${parts.join('; ')}`
   }
@@ -46,7 +48,7 @@ export function install(rt) {
       const self = rt.selfOf(exec.agent?.id)
       const lines = Object.values(state.bots).map(bot => {
         const model = bot.appliedModel ?? bot.model
-        const tags = [bot.role, model ? `model ${model}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
+        const tags = [bot.role, model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
         const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
         return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}`
       })
@@ -174,14 +176,18 @@ export function install(rt) {
       instructions: { type: 'string', required: true, description: 'What this Bot is responsible for and how it should work' },
       brief: { type: 'string', description: 'Why the user wants it, passed to the new Bot as its first context' },
       model: { type: 'string', description: 'Model the Bot runs on, as provider/model or a model id. Only when the user names one; otherwise the DSH default model.' },
+      work_dir: WORK_DIR_PARAM,
     },
     output,
     async execute(args, exec) {
       await rt.load()
       if (!rt.isMain(rt.selfOf(exec.agent?.id))) return 'Only the Main Bot can create Bots. Ask the Main Bot instead.'
       try {
-        const bot = await rt.createBot({ ...args, createdBy: rt.selfOf(exec.agent.id) })
-        return `Created ${bot.name}. It is greeting the user now.`
+        const workDir = args.work_dir ? await rt.cleanWorkDir(args.work_dir) : undefined
+        const name = String(args.name ?? '').trim()
+        await rt.approveFolder(exec, { path: workDir, who: { en: `the new Bot ${name}`, zh: `新 Bot ${name} ` } })
+        const bot = await rt.createBot({ ...args, workDir, createdBy: rt.selfOf(exec.agent.id) })
+        return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`
       }
@@ -190,7 +196,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'update_bot',
-    description: 'Change a Bot\'s name, role, color, model, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
+    description: 'Change a Bot\'s name, role, color, model, working folder, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
     parameters: {
       bot: { type: 'string', description: 'Current name of the Bot to change; leave out to change yourself' },
       name: { type: 'string', description: 'New name' },
@@ -198,6 +204,7 @@ export function install(rt) {
       instructions: { type: 'string', description: 'Replacement instructions' },
       color: { type: 'string', description: `One of ${[...COLORS, ...EXTRA_COLORS].join(', ')}` },
       model: { type: 'string', description: 'Move the Bot to another model, as provider/model or a model id' },
+      work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}; an empty string returns it to the team workspace` },
     },
     output,
     async execute(args, exec) {
@@ -210,8 +217,13 @@ export function install(rt) {
       if (bot.id !== caller.id && !rt.isMain(self)) return 'Only a Main Bot can change another Bot. Leave out bot to change yourself, or ask a Main Bot with message_bot.'
       try {
         const { name: newName, role, instructions, color, model } = args
-        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}) })
-        return `Updated ${next.name}.`
+        const moving = typeof args.work_dir === 'string'
+        const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
+        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
+        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}), ...(moving ? { workDir: workDir ?? '' } : {}) })
+        if (!moving) return `Updated ${next.name}.`
+        const folder = workDir ?? 'the team workspace'
+        return bot.id === caller.id ? `Updated ${next.name}. From your next step on, you work in ${folder}.` : `Updated ${next.name}. It now works in ${folder}.`
       } catch (error) {
         return `Could not update the Bot: ${error.message}`
       }
@@ -294,6 +306,7 @@ export function install(rt) {
       remove_members: { type: 'array', items: { type: 'string' }, description: 'Exact names of Bots to remove' },
       admin: { type: 'string', description: 'Member to make the admin; "none" leaves the group without one (Main Bots only)' },
       mode: MODE_PARAM,
+      work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}. Every member works there in this group; an empty string lets each member work in its own folder again (Main Bots only)` },
     },
     output,
     async execute(args, exec) {
@@ -302,6 +315,8 @@ export function install(rt) {
       if (rt.botOf(self) === undefined) return 'Only Bots on the team can use update_group.'
       const { room, error } = pickRoom(args.group, self)
       if (error) return error
+      const moving = typeof args.work_dir === 'string'
+      if (moving && !rt.isMain(self)) return `Only a Main Bot can set the folder of "${room.name}".`
       const add = resolveBots(args.add_members)
       const remove = resolveBots(args.remove_members)
       const unknown = [...add.unknown, ...remove.unknown]
@@ -315,6 +330,16 @@ export function install(rt) {
         }
       }
       try {
+        const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
+        // A Bot that joins a group with a folder works there from its first turn.
+        const joining = add.bots.filter(bot => !room.members.includes(bot.id))
+        if (moving && workDir !== room.workDir) {
+          const members = [...room.members, ...joining.map(bot => bot.id)]
+          await rt.approveFolder(exec, { path: workDir, sessions: members.map(id => room.sessions?.[id]).filter(Boolean), who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
+        } else if (joining.length > 0) {
+          const names = joining.map(bot => bot.name)
+          await rt.approveFolder(exec, { path: room.workDir, sessions: joining.map(bot => room.sessions?.[bot.id]).filter(Boolean), who: { en: names.join(', '), zh: ` ${names.join('、')} ` } })
+        }
         const { room: next, changes } = await rt.updateRoom(room.id, {
           name: args.name,
           notice: args.notice,
@@ -322,6 +347,7 @@ export function install(rt) {
           admin,
           add: add.bots.map(bot => bot.id),
           remove: remove.bots.map(bot => bot.id),
+          ...(moving ? { workDir: workDir ?? '' } : {}),
         }, self)
         return changes.length === 0 ? `Nothing changed in "${next.name}".` : `Updated "${next.name}": ${changes.join('; ')}.`
       } catch (failure) {
