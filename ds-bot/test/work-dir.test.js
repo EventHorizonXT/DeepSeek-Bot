@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
+import { escapeRegExp } from '../src/host/text.js'
 import { fakeContext } from './fake-ctx.js'
 
 // A Main Bot and a Bot, with the Bot in the group Ops through its group Session 'gb'.
@@ -28,7 +29,8 @@ const TEAM = {
 // starts in the team workspace unless it is made with a cwd. `services` are what
 // ctx.get finds, such as the sandbox policy and approvals.
 async function start({ services = {}, workspaces = [] } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
+  // The native realpath, as fs/promises uses: on Windows the JS one keeps 8.3 short names.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
   const dsh = join(root, 'dsh')
   const home = join(dsh, 'bot')
   const team = join(home, 'workspace')
@@ -191,14 +193,14 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
   assert.deepEqual(created, [{ cwd: project }])
   assert.deepEqual(state().bots.b.segments.map(segment => [segment.sessionId, segment.fallback]), [['b', 'whole']])
   const moved = handoffOf(agentOf('s1'))
-  assert.match(moved, new RegExp(`part 2, because your working folder changed to ${project}\\.`))
-  assert.match(moved, new RegExp(`You now work in ${project}: commands and file tools start there\\.`))
+  assert.match(moved, new RegExp(`part 2, because your working folder changed to ${escapeRegExp(project)}\\.`))
+  assert.match(moved, new RegExp(`You now work in ${escapeRegExp(project)}: commands and file tools start there\\.`))
   assert.match(moved, /No new note: every message of the part was carried over word for word\./)
 
   assert.equal((await call('update-bot', { id: 'b', workDir: '' })).ok, true)
   await until(() => state().bots.b.sessionId === 's2')
   assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
-  assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${team}\\.`))
+  assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${escapeRegExp(team)}\\.`))
 })
 
 test('a running Bot moves at its next step and carries that step\'s input along', async (t) => {
@@ -247,7 +249,7 @@ test('a folder outside the team workspace needs the user\'s approval', async (t)
   t.after(third.stop)
   assert.equal(await third.tool('create_bot', { name: 'Builder', role: 'Build', instructions: 'Build', work_dir: third.project }, 'a'), `Created Builder, working in ${third.project}. It is greeting the user now.`)
   assert.deepEqual(third.created, [{ cwd: third.project }])
-  assert.match(await third.tool('list_bots', {}, 'a'), new RegExp(`- Builder \\(Build, works in ${third.project}\\)`))
+  assert.match(await third.tool('list_bots', {}, 'a'), new RegExp(`- Builder \\(Build, works in ${escapeRegExp(third.project)}\\)`))
 })
 
 test('a group\'s folder holds for every member there; only the user or a Main Bot sets it', async (t) => {
@@ -259,7 +261,7 @@ test('a group\'s folder holds for every member there; only the user or a Main Bo
   assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
   assert.equal(state().rooms.r1.workDir, project)
   assert.equal(requests.length, 0)
-  assert.match(await tool('list_bots', {}, 'a'), new RegExp(`"Ops" — .*; members work in ${project} here`))
+  assert.match(await tool('list_bots', {}, 'a'), new RegExp(`"Ops" — .*; members work in ${escapeRegExp(project)} here`))
 
   // The member's group Session moves at its next turn there; its own chat stays.
   assert.equal(await preStep('b'), 'next')
