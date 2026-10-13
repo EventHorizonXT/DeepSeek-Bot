@@ -120,14 +120,15 @@ const ownChat = [
 // The model answers each call with the next of `replies`. `history` holds the events
 // of a Session, oldest first; each own chat has one user message, at seq 10, unless
 // it says otherwise.
-function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies = [], config = {}, history = {}, reasoning = { efforts: [{ id: 'off' }, { id: 'high' }] } } = {}) {
+function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies = [], config = {}, history = {}, reasoning = { efforts: [{ id: 'off' }, { id: 'high' }] }, models = ['v4'], defaultModel } = {}) {
   if (!existsSync(join(home, 'state.json'))) writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
-  const ctx = fakeContext()
+  const services = defaultModel === undefined ? {} : { agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: defaultModel }) } }
+  const ctx = fakeContext({ services })
   const requests = []
   Object.assign(ctx, {
     llm: {
       listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
-      listModels: async () => [{ id: 'v4' }],
+      listModels: async () => models.map(id => ({ id })),
       resolveModelInfo: async () => ({ reasoning }),
       async* stream(request) {
         requests.push(request)
@@ -135,7 +136,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies =
         if (reply instanceof Error) throw reply
         const out = typeof reply === 'object' && reply !== null ? reply : { text: reply ?? '' }
         yield { type: 'text-delta', index: 0, text: out.text ?? '' }
-        yield { type: 'finish', reason: { kind: out.finish ?? 'stop' } }
+        yield { type: 'finish', reason: { kind: out.finish ?? 'stop', ...(out.failure ? { failure: { message: out.failure } } : {}) } }
       },
     },
     sessionController: {
@@ -404,6 +405,65 @@ test('the panel call asks for the model\'s lowest thinking level when it has no 
   await second.call('memory-view', { botId: 'b2', summarize: true })
   await settle()
   assert.equal(second.requests[0].reasoningEffort, undefined)
+})
+
+const routes = requests => requests.map(request => `${request.provider}/${request.model}@${request.maxTokens}`)
+
+test('a summary the Bot\'s model refuses is written by the profile default model', async (t) => {
+  const replies = [{ text: '', finish: 'error', failure: '403 Forbidden' }, '## Overview\nYou like tea.']
+  const { tool, call, requests, stop } = start({ replies, models: ['v4', 'flash'], defaultModel: 'flash' })
+  t.after(() => stop())
+  await tool('remember', { text: 'Likes tea' }, 'b2')
+  await call('memory-view', { botId: 'b2', summarize: true })
+  await settle()
+  const done = (await call('memory-view', { botId: 'b2' })).value
+  assert.deepEqual([done.summary?.text, done.fresh, done.error], ['## Overview\nYou like tea.', true, null])
+  assert.deepEqual(routes(requests), ['deepseek/v4@2048', 'deepseek/flash@2048'])
+  assert.ok(requests.every(request => request.messages[0].content[0].text.includes('Likes tea')))
+})
+
+test('a summary cut off at both budgets on the Bot\'s model is written by the default model', async (t) => {
+  const replies = [{ text: '', finish: 'max-tokens' }, { text: '## half', finish: 'max-tokens' }, '## Overview\nYou like tea.']
+  const { tool, call, requests, stop } = start({ replies, models: ['v4', 'flash'], defaultModel: 'flash' })
+  t.after(() => stop())
+  await tool('remember', { text: 'Likes tea' }, 'b2')
+  await call('memory-view', { botId: 'b2', summarize: true })
+  await settle()
+  const done = (await call('memory-view', { botId: 'b2' })).value
+  assert.deepEqual([done.summary?.text, done.error], ['## Overview\nYou like tea.', null])
+  assert.deepEqual(routes(requests), ['deepseek/v4@2048', 'deepseek/v4@8192', 'deepseek/flash@2048'])
+})
+
+test('a summary that failed on both models is tried again once the Bot has another model', async (t) => {
+  const replies = [new Error('401: Unauthorized'), { text: '', finish: 'error', failure: '503 Service Unavailable' }]
+  const { tool, call, requests, stop } = start({ replies, models: ['v4', 'flash'], defaultModel: 'flash' })
+  t.after(() => stop())
+  await tool('remember', { text: 'Likes tea' }, 'b2')
+  await call('memory-view', { botId: 'b2', summarize: true })
+  await settle()
+  const failed = (await call('memory-view', { botId: 'b2', summarize: true })).value
+  assert.equal(failed.error, 'deepseek/v4: 401: Unauthorized; deepseek/flash: 503 Service Unavailable')
+  assert.equal(failed.summarizing, false)
+  assert.equal(requests.length, 2)
+
+  assert.equal((await call('update-bot', { id: 'b2', model: 'deepseek/flash' })).ok, true)
+  replies.push('## Overview\nYou like tea.')
+  const retried = (await call('memory-view', { botId: 'b2', summarize: true })).value
+  assert.deepEqual([retried.summarizing, retried.error], [true, null])
+  await settle()
+  const done = (await call('memory-view', { botId: 'b2' })).value
+  assert.deepEqual([done.summary?.text, done.error], ['## Overview\nYou like tea.', null])
+  assert.deepEqual(routes(requests).slice(2), ['deepseek/flash@2048'])
+})
+
+test('"ask or update" falls back to the default model when the Bot\'s model fails', async (t) => {
+  const replies = [new Error('403 Forbidden'), JSON.stringify({ reply: 'You like tea.', changes: [] })]
+  const { tool, call, requests, stop } = start({ replies, models: ['v4', 'flash'], defaultModel: 'flash' })
+  t.after(() => stop())
+  await tool('remember', { text: 'Likes tea' }, 'b2')
+  const answer = (await call('memory-ask', { botId: 'b2', text: 'What do I like?' })).value
+  assert.equal(answer.reply, 'You like tea.')
+  assert.deepEqual(routes(requests), ['deepseek/v4@2048', 'deepseek/flash@2048'])
 })
 
 test('"ask or update" answers from the entries and changes them through the same rules', async (t) => {
