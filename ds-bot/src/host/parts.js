@@ -90,8 +90,9 @@ export function historyEntry(event, group) {
     const text = textOf(event.data?.message?.content)
     return text === '' ? undefined : { answer: true, text }
   }
-  // Cards only show in an own chat.
-  if (event.type === 'tool/call' && event.data?.name === 'ask_user' && !group) {
+  // Cards only show in an own chat. A PTC program's sub-call asks too.
+  const asks = (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') && event.data?.name === 'ask_user'
+  if (asks && !group) {
     const text = cardText(event.data.arguments)
     return text === '' ? undefined : { answer: true, text }
   }
@@ -489,6 +490,7 @@ export function install(rt) {
       system: STEWARD_SYSTEM,
       messages: rt.tagUsage([{ role: 'user', content: [{ type: 'text', text: stewardRequest({ lines, midTurn, checkpoints: checkpointCount(session.deriveMessages()), group }) }] }], { sessionId: agent.id, kind: 'compaction' }),
       maxTokens: STEWARD_MAX_TOKENS,
+      sessionId: session.id,
       purpose: 'compaction',
       signal: AbortSignal.timeout(STEWARD_TIMEOUT_MS),
     })) assembler.push(chunk)
@@ -902,7 +904,7 @@ export function install(rt) {
   // in the part's history. When nothing is left to do, that turn's reply is a fixed
   // line instead of a model call.
   ctx.on('llm/stream', (options, next) => {
-    if (options.sessionId === undefined || options.purpose !== undefined) return next()
+    if (options.sessionId === undefined || options.purpose !== undefined || rt.ownRequest(options)) return next()
     const messages = options.messages ?? []
     const since = messages.findLastIndex(message => message.role === 'assistant' || message.role === 'tool') + 1
     const opened = messages.slice(since).filter(message => message.role === 'user' && (message.source?.kind === 'user' || message.source?.kind === SOURCE_KIND))
