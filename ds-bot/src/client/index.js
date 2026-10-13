@@ -773,7 +773,9 @@ export function apply(ctx) {
     shadow('conversation.chat.node', { key: 'turn-trigger', priority: -10, locale: 'chat', inject: face }, TriggerCell),
     shadow('conversation.chat.node', { key: 'tool-call', priority: -10, locale: 'chat', inject: face }, ToolCell),
     shadow('conversation.chat.node', { key: 'turn-process', priority: -10, locale: 'chat', inject: face }, TurnProcessCell),
-    shadow('conversation.chat.node', { key: 'turn-tail', priority: -10, locale: 'chat', inject: face }, TurnTailCell),
+    // DSH's own turn tail stays, so what other plugins add there shows, such as the
+    // cards of the files a turn delivered; its copy and branch row is hidden.
+    shadow('conversation.chat.turnTail', { id: 'bot-turn-separators', order: 1000, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     shadow('conversation.chat.node', { key: 'question-reply', priority: -10, locale: 'chat' }, AnsweredCell),

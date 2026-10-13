@@ -2598,6 +2598,10 @@ header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inse
 header[class*="_header"]:has(.bt-head)>[class*="_headerLeading"]{position:absolute;left:12px;top:10px;pointer-events:auto}
 header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [class*="_body"]:has(> [class*="_scrollBody"]){--dsh-chat-content-width:min(960px,100%)}
+/* DSH's turn tail keeps what plugins put in it (delivered files, the Bot's separators),
+   without its copy and branch row; a tail with nothing in it takes no room. */
+[data-turn-tail]>:not([data-slot="conversation.chat.turnTail"]){display:none!important}
+[class*="_flowItem"][data-chat-flow-kind="turn-tail"]:not(:has([data-slot="conversation.chat.turnTail"]:not(:empty))){display:none!important}
 /* Every team Session belongs to a Bot or a group, so a blank one is an empty chat, not
    the shell's new-session hero: no headline, no workspace or mode picker, and the
    composer stays docked at the bottom. */
@@ -3729,7 +3733,7 @@ var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
-function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions }) {
   const onClick = (event) => {
     const target = mentionTarget(event);
     if (target === null) return;
@@ -3756,7 +3760,7 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
           (0, import_react6.createElement)(
             "div",
             { className: "bt-bubble" },
-            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact" })
+            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact", fileMentions: mentions })
           ),
           live ? null : (0, import_react6.createElement)(MessageTools, { text, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions })
         ),
@@ -3857,11 +3861,22 @@ function ThinkingRow({ text }) {
     (0, import_react6.createElement)("div", { className: "bt-think-text" }, text)
   );
 }
-function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
+function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
+  const tail = useTurnData?.("turn-tail");
+  const location2 = node.location;
+  const turn = location2?.kind === "turn" || location2?.kind === "step" ? location2.turn : void 0;
+  const seq = node.data.finalNode?.seq;
+  return (0, import_react6.useMemo)(() => {
+    if (typeof fileMentions !== "function" || turn?.status !== "closed" || seq === void 0) return void 0;
+    return tail?.closing?.finalNode.seq === seq ? fileMentions({ turn, seq, openFile }) : void 0;
+  }, [fileMentions, openFile, seq, tail, turn]);
+}
+function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
   const steps = useTurnSteps(String(data.turn));
   const contexts = useTurnContext(String(data.turn));
+  const mentions = useFileMentions({ node, openFile, fileMentions, useTurnData });
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
@@ -3888,7 +3903,7 @@ function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSt
       });
     }),
     reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
-    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, mentions }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
@@ -4180,19 +4195,20 @@ function openingTurn(turns, firstTurns, hiddenTurns) {
   return listed.includes(turn) && earlier.every((entry) => hiddenTurns?.includes(entry)) ? { turn, start } : null;
 }
 var unseenSince = (visit, time) => typeof visit?.seen === "number" && time > visit.seen && time <= visit.entered;
-function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
-  const data = node.data;
+function TurnTailCell({ turn: location2, sessionId, useTurnClock, useUi, actions }) {
+  const turn = location2.turn;
+  const time = location2.end.time;
   (0, import_react6.useEffect)(() => {
-    actions.noteTurnTime(sessionId, data.turn, "end", data.time);
-  }, [sessionId, data.turn, data.time]);
+    actions.noteTurnTime(sessionId, turn, "end", time);
+  }, [sessionId, turn, time]);
   const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn);
-    return start !== void 0 && start - data.time >= SEPARATOR_GAP_MS ? clockLabel(start) : "";
+    const start = nextTurnStart(state[sessionId] ?? {}, turn);
+    return start !== void 0 && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : "";
   });
   const visit = useUi((state) => state.visits?.[sessionId]);
   const fresh = useTurnClock((state) => {
-    if (typeof visit?.seen !== "number" || data.time > visit.seen) return false;
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn);
+    if (typeof visit?.seen !== "number" || time > visit.seen) return false;
+    const start = nextTurnStart(state[sessionId] ?? {}, turn);
     return start !== void 0 && start > visit.seen && start <= visit.entered;
   });
   if (!label && !fresh) return null;
@@ -13767,7 +13783,9 @@ function apply(ctx) {
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
-    shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: face }, TurnTailCell),
+    // DSH's own turn tail stays, so what other plugins add there shows, such as the
+    // cards of the files a turn delivered; its copy and branch row is hidden.
+    shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),

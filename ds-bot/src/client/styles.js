@@ -812,6 +812,10 @@ header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inse
 header[class*="_header"]:has(.bt-head)>[class*="_headerLeading"]{position:absolute;left:12px;top:10px;pointer-events:auto}
 header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [class*="_body"]:has(> [class*="_scrollBody"]){--dsh-chat-content-width:min(960px,100%)}
+/* DSH's turn tail keeps what plugins put in it (delivered files, the Bot's separators),
+   without its copy and branch row; a tail with nothing in it takes no room. */
+[data-turn-tail]>:not([data-slot="conversation.chat.turnTail"]){display:none!important}
+[class*="_flowItem"][data-chat-flow-kind="turn-tail"]:not(:has([data-slot="conversation.chat.turnTail"]:not(:empty))){display:none!important}
 /* Every team Session belongs to a Bot or a group, so a blank one is an empty chat, not
    the shell's new-session hero: no headline, no workspace or mode picker, and the
    composer stays docked at the bottom. */
