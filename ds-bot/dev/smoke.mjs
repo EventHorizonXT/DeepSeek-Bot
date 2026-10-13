@@ -190,6 +190,13 @@ await step('Chief creates Writer, who replies', () => send(chief().id, '创建�
     ?? expect(kinds.includes('request') && kinds.includes('reply'), `expected a request and a reply, got ${kinds}`)
 })
 
+// The mock calls dsh's ask_user_question for 阻塞提问 whenever the request offers it.
+await step('a Bot is not offered dsh\'s blocking question tool', () => send(botNamed('Writer').id, '阻塞提问'), (_value, calls) => {
+  const asked = calls.some(call => (call.out ?? []).some(block => block.type === 'tool_use' && block.name === 'ask_user_question'))
+  return expect(!asked, 'Writer called ask_user_question')
+    ?? expect(saidText(calls, /^收到：阻塞提问/), 'expected Writer to answer in its reply')
+})
+
 await step('user creates Coder, who keeps the default model', () => api('create-bot', { name: 'Coder', role: 'Engineer', instructions: 'Write code.' }), (bot) => {
   const coder = botNamed('Coder')
   return expect(coder && coder.id === bot.id && coder.role === 'Engineer', 'Coder not saved as asked')
