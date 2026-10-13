@@ -17,7 +17,6 @@ import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, Too
 import { Overlays } from './overlays.js'
 import { createBotBrowsers, serveBrowserReads } from './bot-browsers.js'
 import { BROWSER_CSS } from './browser-pane.js'
-import { holdFlatTranscript } from './flat-transcript.js'
 import { SECRET_CSS, SecretDock } from './secret-card.js'
 import { MODEL_CSS, ModelChoiceDock, DeepSeekSignIn } from './model-menu.js'
 import { BOT_SETTINGS_CSS } from './bot-settings.js'
@@ -25,7 +24,7 @@ import { GROUP_SETTINGS_CSS } from './group-settings.js'
 import { USAGE_CSS } from './usage-page.js'
 import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
-import { groupsFor, readMode, writeMode } from './surface.js'
+import { groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
 import { installLocale, language } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
@@ -34,7 +33,7 @@ import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
 
-export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
+export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
@@ -299,9 +298,12 @@ export function apply(ctx) {
     return () => {
       offRoster()
       offRegistry()
-      if (typeof releaseTokens === 'function') releaseTokens()
-      delete document.body.dataset.btMotion
-      style.remove()
+      try {
+        if (typeof releaseTokens === 'function') releaseTokens()
+      } finally {
+        delete document.body.dataset.btMotion
+        style.remove()
+      }
     }
   }
 
@@ -755,8 +757,6 @@ export function apply(ctx) {
     shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
     shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
     shadow('settings.trigger', { priority: -10 }, YouAvatar),
-    // ui-chat's "Transcript view" row: a lower priority on the same list id shadows it.
-    shadow('settings.general.item', { id: 'transcript-view', priority: -10 }, Nothing),
     // At priority -10 the whale wins the seat over a shell account plugin's own
     // launcher (the Desktop's "··· More"), which comes back in Agent mode.
     shadow('settings.launcher', { priority: -10, inject: face }, AccountLauncher),
@@ -768,9 +768,6 @@ export function apply(ctx) {
     installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     installMentions(),
     installAtMenu(),
-    // Bot conversations are always flat, so the work-details mode is not a choice:
-    // the mode is held at `verbose` while this group is mounted.
-    holdFlatTranscript(ctx.configForms.get('ui-chat')),
     shadow('conversation.session.header', { priority: -10, inject: face }, HeaderPill),
     shadow('conversation.chat.node', { key: 'assistant-step', priority: -10, locale: 'chat', inject: assistantFace }, AssistantCell),
     shadow('conversation.chat.node', { key: 'turn-trigger', priority: -10, locale: 'chat', inject: face }, TriggerCell),
@@ -865,20 +862,13 @@ export function apply(ctx) {
   }, 'ds-bot: agent surface')
 
   ctx.effect(() => {
-    const mounted = { shell: [], conversation: [] }
-    const reconcile = () => {
-      const wanted = groupsFor(surface.getSnapshot())
-      for (const group of ['shell', 'conversation']) {
-        if (wanted[group] === (mounted[group].length > 0)) continue
-        if (wanted[group]) mounted[group] = (group === 'shell' ? installShell : installConversation)()
-        else { for (const dispose of mounted[group]) dispose?.(); mounted[group] = [] }
-      }
-    }
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation })
+    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()))
     reconcile()
     const unsub = surface.subscribe(reconcile)
     return () => {
       unsub()
-      for (const group of ['shell', 'conversation']) { for (const dispose of mounted[group]) dispose?.(); mounted[group] = [] }
+      groups.dispose()
     }
   }, 'ds-bot: surface')
 }
