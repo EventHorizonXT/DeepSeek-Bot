@@ -12782,6 +12782,40 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
 function groupsFor({ mode, plain = false }) {
   return { shell: mode === "bot", conversation: mode === "bot" && !plain };
 }
+var GROUPS = ["shell", "conversation"];
+function disposeAll(disposers, label) {
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      dispose?.();
+    } catch (error) {
+      console.warn(`[ds-bot] ${label}`, error);
+    }
+  }
+}
+function surfaceGroups(install) {
+  const mounted = { shell: [], conversation: [] };
+  const withdraw = (group) => {
+    const disposers = mounted[group];
+    mounted[group] = [];
+    disposeAll(disposers, `withdraw ${group}`);
+  };
+  return {
+    reconcile(wanted) {
+      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
+      for (const group of GROUPS) {
+        if (!wanted[group] || mounted[group].length > 0) continue;
+        try {
+          mounted[group] = install[group]();
+        } catch (error) {
+          console.warn(`[ds-bot] install ${group}`, error);
+        }
+      }
+    },
+    dispose() {
+      for (const group of [...GROUPS].reverse()) withdraw(group);
+    }
+  };
+}
 function readMode(storage = globalThis.localStorage) {
   try {
     return storage.getItem(STORAGE.surface) === "agent" ? "agent" : "bot";
@@ -13231,9 +13265,12 @@ function apply(ctx) {
     return () => {
       offRoster();
       offRegistry();
-      if (typeof releaseTokens === "function") releaseTokens();
-      delete document.body.dataset.btMotion;
-      style.remove();
+      try {
+        if (typeof releaseTokens === "function") releaseTokens();
+      } finally {
+        delete document.body.dataset.btMotion;
+        style.remove();
+      }
     };
   };
   const installBubbleTokens = () => {
@@ -13832,26 +13869,13 @@ function apply(ctx) {
     };
   }, "ds-bot: agent surface");
   ctx.effect(() => {
-    const mounted = { shell: [], conversation: [] };
-    const reconcile = () => {
-      const wanted = groupsFor(surface.getSnapshot());
-      for (const group of ["shell", "conversation"]) {
-        if (wanted[group] === mounted[group].length > 0) continue;
-        if (wanted[group]) mounted[group] = (group === "shell" ? installShell : installConversation)();
-        else {
-          for (const dispose of mounted[group]) dispose?.();
-          mounted[group] = [];
-        }
-      }
-    };
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation });
+    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
     const unsub = surface.subscribe(reconcile);
     return () => {
       unsub();
-      for (const group of ["shell", "conversation"]) {
-        for (const dispose of mounted[group]) dispose?.();
-        mounted[group] = [];
-      }
+      groups.dispose();
     };
   }, "ds-bot: surface");
 }

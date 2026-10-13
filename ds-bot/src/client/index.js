@@ -24,7 +24,7 @@ import { GROUP_SETTINGS_CSS } from './group-settings.js'
 import { USAGE_CSS } from './usage-page.js'
 import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
-import { groupsFor, readMode, writeMode } from './surface.js'
+import { groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
 import { installLocale, language } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
@@ -298,9 +298,12 @@ export function apply(ctx) {
     return () => {
       offRoster()
       offRegistry()
-      if (typeof releaseTokens === 'function') releaseTokens()
-      delete document.body.dataset.btMotion
-      style.remove()
+      try {
+        if (typeof releaseTokens === 'function') releaseTokens()
+      } finally {
+        delete document.body.dataset.btMotion
+        style.remove()
+      }
     }
   }
 
@@ -883,20 +886,13 @@ export function apply(ctx) {
   }, 'ds-bot: agent surface')
 
   ctx.effect(() => {
-    const mounted = { shell: [], conversation: [] }
-    const reconcile = () => {
-      const wanted = groupsFor(surface.getSnapshot())
-      for (const group of ['shell', 'conversation']) {
-        if (wanted[group] === (mounted[group].length > 0)) continue
-        if (wanted[group]) mounted[group] = (group === 'shell' ? installShell : installConversation)()
-        else { for (const dispose of mounted[group]) dispose?.(); mounted[group] = [] }
-      }
-    }
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation })
+    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()))
     reconcile()
     const unsub = surface.subscribe(reconcile)
     return () => {
       unsub()
-      for (const group of ['shell', 'conversation']) { for (const dispose of mounted[group]) dispose?.(); mounted[group] = [] }
+      groups.dispose()
     }
   }, 'ds-bot: surface')
 }

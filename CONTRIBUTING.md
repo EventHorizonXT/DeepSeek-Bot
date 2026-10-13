@@ -8,7 +8,7 @@ Thank you for your interest in improving DS Bot. The project is still changing q
 
 ## The rules that matter most
 
-1. **DS Bot is a DSH plugin, and only a plugin.** Do not patch DeepSeek Harness, and do not depend on files inside a DSH install. Use the plugin APIs that DSH documents (Cordis services, the plugin client entry, profile patches). When a feature needs something that DSH does not offer, open an issue here first; the fix can belong in DSH.
+1. **Build on DSH; never patch it.** The Bot features are a DSH plugin: use the plugin APIs that DSH documents (Cordis services, the plugin client entry, profile patches). The desktop app starts DSH only through the entry points that DSH documents (`@deepseek-ai/dsh/profile-boot`, the `dsh` command). Do not patch DeepSeek Harness, and do not depend on files inside a DSH install. When a feature needs something that DSH does not offer, open an issue here first; the fix can belong in DSH.
 2. **Every Bot is a DSH Session.** Bot work runs through the normal DSH agent loop, tools and model routes. Do not add a second agent runtime.
 3. **No real secrets anywhere.** Do not commit API keys, tokens, cookies, `DSH_HOME` folders, logs or screenshots with personal data. The tests and the test bench use a scripted mock model and need no key.
 4. **Only original material.** Do not copy code, text, icons, logos or other graphics from other products or websites. Code under a license compatible with Apache 2.0 is the only exception: say where it comes from and add its notice to a `NOTICE` file.
