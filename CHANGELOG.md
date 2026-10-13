@@ -4,6 +4,11 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Fixed
+
+- A new Bot asks where to start in its first reply instead of on a question card, and follows its own instructions where they say otherwise.
+- Bots no longer use DeepSeek Harness's own question card, which held the Bot until you answered it while messages from other Bots waited.
+
 ## [0.1.4] - 2026-10-13
 
 ### Added
