@@ -8,8 +8,9 @@
 //
 // `--out <file>` writes a normalized transcript (names instead of ids, sorted where the
 // order depends on timing), so two runs, before and after a refactor, can be diffed.
-import { readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const [name, port, ...rest] = process.argv.slice(2)
@@ -269,6 +270,26 @@ await step('update Writer', () => api('update-bot', { id: botNamed('Writer').id,
   const writer = botNamed('Writer')
   return expect(writer.role === 'Copywriter' && writer.instructions === 'Write the copy.', 'update not saved')
 })
+
+// dsh keeps each Session under a folder named after its cwd. A change of working folder
+// moves the Bot's own chat on to a fresh part made there; the fresh part then stays put.
+const project = realpathSync(mkdtempSync(join(tmpdir(), 'ds-bot-smoke-folder-')))
+const folderOf = sessionId => readdirSync(join(HOME, 'sessions')).find(dir => existsSync(join(HOME, 'sessions', dir, sessionId)))
+const coderParts = () => (botNamed('Coder').segments ?? []).length
+const partsBeforeFolder = coderParts()
+await step('Coder works in a folder of its own', () => api('update-bot', { id: botNamed('Coder').id, workDir: project }), () => {
+  const coder = botNamed('Coder')
+  return expect(coder.workDir === project, `folder not saved (${coder.workDir})`)
+    ?? expect(coderParts() === partsBeforeFolder + 1, `Coder has ${coderParts()} earlier parts, not ${partsBeforeFolder + 1}`)
+    ?? expect(folderOf(coder.sessionId)?.includes(basename(project)), `Coder's chat is under ${folderOf(coder.sessionId)}`)
+})
+await step('Coder answers from its folder', () => send(botNamed('Coder').id, '你好'), () => expect(coderParts() === partsBeforeFolder + 1, 'Coder moved on again'))
+await step('Coder goes back to the team workspace', () => api('update-bot', { id: botNamed('Coder').id, workDir: '' }), () => {
+  const coder = botNamed('Coder')
+  return expect(coder.workDir === undefined, 'folder not cleared')
+    ?? expect(folderOf(coder.sessionId)?.endsWith('-bot-workspace--'), `Coder's chat is under ${folderOf(coder.sessionId)}`)
+})
+rmSync(project, { recursive: true, force: true })
 
 await step('pin Coder', () => api('set-flags', { id: botNamed('Coder').id, pinned: true }), () => expect(botNamed('Coder').pinned === true, 'not pinned'))
 
