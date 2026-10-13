@@ -90,8 +90,9 @@ export function historyEntry(event, group) {
     const text = textOf(event.data?.message?.content)
     return text === '' ? undefined : { answer: true, text }
   }
-  // Cards only show in an own chat.
-  if (event.type === 'tool/call' && event.data?.name === 'ask_user' && !group) {
+  // Cards only show in an own chat. A PTC program's sub-call asks too.
+  const asks = (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') && event.data?.name === 'ask_user'
+  if (asks && !group) {
     const text = cardText(event.data.arguments)
     return text === '' ? undefined : { answer: true, text }
   }
