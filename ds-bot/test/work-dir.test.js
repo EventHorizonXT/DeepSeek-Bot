@@ -201,7 +201,10 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
   const { call, created, agentOf, project, team, state, stop } = await start()
   t.after(stop)
   assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
+  // The new Session id is saved before the handoff is sent, so wait for both. The id
+  // comes first: the fake agent takes its cwd when it is first looked up.
   await until(() => state().bots.b.sessionId === 's1')
+  await until(() => handoffOf(agentOf('s1')) !== undefined)
   assert.deepEqual(created, [{ cwd: project }])
   assert.deepEqual(state().bots.b.segments.map(segment => [segment.sessionId, segment.fallback]), [['b', 'whole']])
   const moved = handoffOf(agentOf('s1'))
@@ -211,6 +214,7 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
 
   assert.equal((await call('update-bot', { id: 'b', workDir: '' })).ok, true)
   await until(() => state().bots.b.sessionId === 's2')
+  await until(() => handoffOf(agentOf('s2')) !== undefined)
   assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
   assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${escapeRegExp(team)}\\.`))
 })
