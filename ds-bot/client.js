@@ -1322,9 +1322,6 @@ var shellTokens = ({ light, dark }) => ({
   "--dsw-alias-label-secondary": { light: rgba(light.text, 0.74), dark: rgba(dark.text, 0.74) },
   "--dsw-alias-label-tertiary": { light: rgba(light.text, 0.6), dark: rgba(dark.text, 0.6) }
 });
-var conversationTokens = ({ light, dark }) => ({
-  "--dsw-specific-bubble": { light: light.user, dark: dark.user }
-});
 var customThemes = {};
 var registry = createSource(0);
 var isPoint = (point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
@@ -2695,9 +2692,10 @@ body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) 
 [data-chain-overlay-fallback="conversation.composer"]:has(~ .bt-q){display:block!important;order:2}
 .bt-q{order:1}
 div:has(> nav [class*="_marks"]){display:none!important}
-/* The theme paints --dsw-specific-bubble in the user color, and that token backs every
-   user-side bubble: sent, steering mid-turn, not yet admitted, question replies. */
-[class*="_userRow"] [class*="_bubble"],[data-chat-flow-kind=question-reply] [class*="_bubble"],[data-chat-flow-kind=command-input] [class*="_bubble"]{color:var(--bt-user-ink)!important;border-radius:18px!important;padding:7px 12px!important;font-size:var(--dsh-content-font-size,14px)!important;line-height:calc(var(--dsh-content-font-size,14px) + 8px)!important}
+/* Every user-side bubble (sent, steering mid-turn, not yet admitted, question replies)
+   takes its surface and its text from the one --bt-user pair: a skin that repaints
+   the host's bubble surface alone would otherwise leave the text unreadable. */
+[class*="_userRow"] [class*="_bubble"],[data-chat-flow-kind=question-reply] [class*="_bubble"],[data-chat-flow-kind=command-input] [class*="_bubble"]{background:var(--bt-user)!important;color:var(--bt-user-ink)!important;border-radius:18px!important;padding:7px 12px!important;font-size:var(--dsh-content-font-size,14px)!important;line-height:calc(var(--dsh-content-font-size,14px) + 8px)!important}
 [class*="_userRow"] [class*="_bubble"] [class*="_markdown"],[class*="_userRow"] [class*="_bubble"] a{color:inherit}
 /* Sent messages get the hover toolbar below; steering and unsent bubbles keep none. */
 [class*="_userRow"] [class*="_actions"]{display:none!important}
@@ -12925,7 +12923,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
 var USER_MESSAGE_CSS = `
 .bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px}
 .bt-ustack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702),82%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--dsw-specific-bubble,var(--bt-user));color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
+.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}
 .bt-umention:hover{text-decoration:underline;text-underline-offset:2px}
@@ -13271,30 +13269,6 @@ function apply(ctx) {
         delete document.body.dataset.btMotion;
         style.remove();
       }
-    };
-  };
-  const installBubbleTokens = () => {
-    let release = null;
-    let key = "";
-    const render = () => {
-      const snapshot = roster.getSnapshot();
-      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs;
-      const themes = allThemes();
-      const id = themes[prefs.theme] ? prefs.theme : "deepseek";
-      const next = `${id}|${registry.getSnapshot()}`;
-      if (next === key) return;
-      key = next;
-      const drop = release;
-      release = ctx.theme.overrideTokens("ds-bot: conversation", conversationTokens(themes[id]));
-      if (typeof drop === "function") drop();
-    };
-    render();
-    const offRoster = roster.subscribe(render);
-    const offRegistry = registry.subscribe(render);
-    return () => {
-      offRoster();
-      offRegistry();
-      if (typeof release === "function") release();
     };
   };
   ctx.effect(() => {
@@ -13786,7 +13760,6 @@ function apply(ctx) {
   ];
   const installConversation = () => [
     installCompiledStyles(CONVERSATION_CSS, "conversation"),
-    installBubbleTokens(),
     installMentions(),
     installAtMenu(),
     shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
