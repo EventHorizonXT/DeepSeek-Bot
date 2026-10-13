@@ -2,11 +2,12 @@
 // question card. Group rounds and reading chats are in groups.js.
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { COLORS, EXTRA_COLORS, MAX_HOPS, ROOM_BOT_ROUNDS, ROOM_MODES } from './constants.js'
+import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNREAD_REQUESTS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
 import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
+const BLOCKING_QUESTION_TOOL = 'ask_user_question'
 const MODE_PARAM = {
   type: 'string',
   enum: ROOM_MODES,
@@ -74,6 +75,12 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
   }
+  // Delivered but not read yet: no step or turn has taken them out of the inbox.
+  const unreadRequests = agent => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+    .filter(message => message.source?.kind === SOURCE_KIND && message.source.role === 'request').length
+
+  // A tool that throws shows as failed in the chat, instead of as sent or stopped.
+  const refuse = (message) => { throw new Error(message) }
 
   ctx.tools.register(defineTool({
     name: 'message_bot',
@@ -103,8 +110,13 @@ export function install(rt) {
       const turn = rt.live.get(exec.agent?.id)
       const hop = Math.max(turn?.info?.hop ?? 0, ...(turn?.joined ?? []).map(joined => joined.info?.hop ?? 0))
       if (hop >= MAX_HOPS) return 'This chain of Bot messages is already long. Stop here and report to the user instead.'
+      const chat = rt.chatOf(target.id)
+      const unread = unreadRequests(await rt.resolveAgent(chat))
+      if (unread >= MAX_UNREAD_REQUESTS) {
+        refuse(`Not sent: ${target.name} has not read the last ${unread} messages from Bots yet, so it is most likely stuck, for example waiting for the user. Do not send it more; tell the user that ${target.name} is not responding.`)
+      }
       const toUser = args.reply_to === 'user'
-      const working = rt.live.get(rt.chatOf(target.id))?.turn !== undefined
+      const working = rt.live.get(chat)?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
       await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
       const sent = toUser
@@ -114,17 +126,19 @@ export function install(rt) {
           : working
             ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
             : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
+      // "Delivered" only means it is in the inbox; say so when it may sit there a while.
+      const notes = [
+        rt.waitsForApproval?.(chat) ? `${target.name} is waiting for the user's approval, so it reads your message only after the user answers.` : '',
+        unread > 0 ? `${target.name} has not read ${unread === 1 ? 'an earlier message' : `${unread} earlier messages`} from Bots yet.` : '',
+      ].filter(Boolean)
+      const status = notes.length === 0 ? sent : `${sent} ${notes.join(' ')}`
       // Messages reach a Bot's own chat only; work in a group goes on without them.
-      const groups = activeSessions(target.id).running.filter(sessionId => sessionId !== rt.chatOf(target.id))
-      if (groups.length === 0) return sent
+      const groups = activeSessions(target.id).running.filter(sessionId => sessionId !== chat)
+      if (groups.length === 0) return status
       const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
-      return `${sent} ${target.name} is also working in ${groups.map(whereOf).join(' and ')}; your message does not reach that work.${stop}`
+      return `${status} ${target.name} is also working in ${groups.map(whereOf).join(' and ')}; your message does not reach that work.${stop}`
     },
   }))
-
-  // stop_bot throws when it does nothing, so the chat shows the call as failed
-  // instead of "Stopped".
-  const refuse = (message) => { throw new Error(message) }
 
   ctx.tools.register(defineTool({
     name: 'stop_bot',
@@ -451,6 +465,38 @@ export function install(rt) {
     },
   }))
 
+  // dsh's own question tool holds the turn open until the user answers, and every
+  // message from another Bot or a group round queues behind it. Bot Sessions ask
+  // through ask_user instead, so the tool is taken out of their tool list.
+  const hiddenQuestion = new WeakSet()
+  const hideBlockingQuestion = (agent) => {
+    if (agent === undefined || hiddenQuestion.has(agent) || !rt.isBotSession(agent.session?.id)) return
+    if (typeof agent.ctx?.tools?.restrict !== 'function') return
+    try {
+      // restrict() throws on a name this profile does not serve.
+      if (!ctx.tools.schemas(agent).some(schema => schema.name === BLOCKING_QUESTION_TOOL)) return
+      agent.ctx.tools.restrict({ deny: [BLOCKING_QUESTION_TOOL] })
+      hiddenQuestion.add(agent)
+    } catch (error) {
+      rt.warn('ds-bot: %s stays in the tool list of %s: %s', BLOCKING_QUESTION_TOOL, agent.session?.id, error)
+    }
+  }
+  // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the
+  // list is only trimmed once ds-bot resolves that Agent again; the guard refuses
+  // the tool in any Bot Session meanwhile.
+  ctx.tools.guard(exec => (exec.name === BLOCKING_QUESTION_TOOL && rt.isBotSession(exec.agent?.id)
+    ? `Bots cannot use ${BLOCKING_QUESTION_TOOL}. Ask with ask_user in your own chat, or ask in your reply.`
+    : undefined))
+  // Creation waits for this listener, so the Agent's first step already lacks the tool.
+  ctx.on('agent/created', async ({ agent }) => {
+    try {
+      await rt.load()
+      hideBlockingQuestion(agent)
+    } catch (error) {
+      rt.warn('ds-bot: hiding %s on agent/created failed: %s', BLOCKING_QUESTION_TOOL, error)
+    }
+  })
+
   ctx.tools.register(defineTool({
     name: 'list_capabilities',
     description: 'List shared MCP servers, skills, and packs, plus the capabilities attached to you.',
@@ -549,5 +595,5 @@ export function install(rt) {
     }))
   }
 
-  Object.assign(rt, { pickRoom })
+  Object.assign(rt, { pickRoom, hideBlockingQuestion })
 }
