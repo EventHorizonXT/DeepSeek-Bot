@@ -1,7 +1,7 @@
 import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
-import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
+import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
@@ -95,6 +95,9 @@ export function apply(ctx) {
   let workKey = ''
   // Per Session, what its transcript has in flight (running tools, a streaming reply).
   const live = createSource({})
+  // Per Session, the ask_user and request_secret calls its transcript draws; the
+  // docks carry the cards of the other calls.
+  const cards = createSource({})
   // Per Session, the first visible time and the end time of each turn the transcript
   // has rendered; time separators compare one turn's end with the next turn's start.
   const turnClock = createSource({})
@@ -692,6 +695,9 @@ export function apply(ctx) {
       return { ...state, [sessionId]: next }
     })
   }
+  actions.noteCards = (sessionId, callIds, delta) => {
+    if (sessionId !== undefined) cards.set(state => countCards(state, sessionId, callIds, delta))
+  }
   actions.clearLive = sessionId => live.set((state) => {
     if (!state[sessionId]) return state
     const next = { ...state }
@@ -700,7 +706,7 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })
   ctx.effect(() => noticeApprovals({
     work,
     roster,

@@ -596,6 +596,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
 const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+// Calls whose card a dock above the composer carries when the call is not drawn.
+const CARDS = new Set(['ask_user', 'request_secret'])
+
 // The root and its sub-calls in dispatch order, each call once.
 export function callTree(root) {
   const calls = []
@@ -609,6 +612,18 @@ export function callTree(root) {
   }
   visit(root)
   return calls
+}
+
+// Tells the docks which card calls the transcript draws, so a card shows in one place.
+// A layout effect: the dock drops its copy of the card before the first paint.
+function useShownCards(actions, sessionId, callIds) {
+  const key = JSON.stringify(callIds)
+  useLayoutEffect(() => {
+    const ids = JSON.parse(key)
+    if (ids.length === 0 || !actions.noteCards) return undefined
+    actions.noteCards(sessionId, ids, 1)
+    return () => actions.noteCards(sessionId, ids, -1)
+  }, [sessionId, key])
 }
 
 function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot }) {
@@ -700,6 +715,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null
   // A running tool shows only as the activity row's phrase.
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note)
+  useShownCards(actions, sessionId, drawn.filter(call => CARDS.has(toolName(call)) && call.callId).map(call => call.callId))
   if (drawn.length === 0) return null
   const env = { sessionId, roster, actions, useUi, useWork, findBot }
   return h(Fragment, null, drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))))

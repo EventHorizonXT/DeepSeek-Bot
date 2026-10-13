@@ -7,6 +7,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 ### Fixed
 
 - With the `ptc` agent preset, the chat shows the tools a Bot runs from its code again: group replies, question and key cards, and the lines for messages, Bots, groups and memory.
+- A question or key card whose call is not on screen, such as one asked in an earlier part of the chat or in a Bot-to-Bot turn, waits above the message box. A card shows in one place only.
 
 ## [0.1.4] - 2026-10-13
 

@@ -4,12 +4,15 @@ import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
 
-// The tool cells, bundled once and rendered with a minimal React:
+// The tool cells and the card docks, bundled once and rendered with a minimal React:
 // components run as plain functions, effects are collected and run on demand.
 const { outputFiles } = await build({
   stdin: {
     contents: [
       "export { ToolCell, callTree } from './src/client/cells.js'",
+      "export { QuestionDock } from './src/client/questions.js'",
+      "export { SecretDock } from './src/client/secret-card.js'",
+      "export { countCards } from './src/client/sources.js'",
     ].join('\n'),
     resolveDir: fileURLToPath(new URL('..', import.meta.url)),
   },
@@ -41,7 +44,7 @@ runInNewContext(outputFiles[0].text, {
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { ToolCell, callTree } = module.exports
+const { ToolCell, callTree, QuestionDock, SecretDock, countCards } = module.exports
 
 // Runs the effects collected since the last render; returns the cleanups.
 const mount = () => {
@@ -217,6 +220,91 @@ test('the live note follows the running sub-call of a program', () => {
   const roster = team({ exchangeTurns: { chief: [1] } })
   assert.deepEqual(notes(program([call('message_bot', 'program:ptc:1', { args: { to: 'Writer' }, running: true })], { running: true }), { roster }), [])
   assert.equal(notes(call('message_bot', 'direct', { args: { to: 'Writer' }, running: true }))[0].entry.label, 'Asking Writer')
+})
+
+// A minimal cards store, as index.js keeps it.
+const cardStore = () => {
+  const store = { state: {} }
+  store.noteCards = (sessionId, ids, delta) => { store.state = countCards(store.state, sessionId, ids, delta) }
+  return store
+}
+const draw = (root, store, options = {}) => {
+  effects = []
+  ToolCell(props(root, { ...options, actions: { noteCards: store.noteCards } }))
+  const unmount = mount()
+  return { out: show(root, options), unmount }
+}
+
+test('a cell tells the docks which card calls it draws, until it unmounts', () => {
+  const store = cardStore()
+  const root = program([call('ask_user', 'program:ptc:1'), call('request_secret', 'program:ptc:2'), call('message_bot', 'program:ptc:3')])
+  ToolCell(props(root, { actions: { noteCards: store.noteCards } }))
+  const unmount = mount()
+  assert.deepEqual(JSON.parse(JSON.stringify(store.state)), { chief: { 'program:ptc:1': 1, 'program:ptc:2': 1 } })
+  ToolCell(props(root, { actions: { noteCards: store.noteCards } }))
+  const second = mount()
+  assert.equal(store.state.chief['program:ptc:1'], 2)
+  second()
+  unmount()
+  assert.deepEqual(JSON.parse(JSON.stringify(store.state)), { chief: {} })
+  ToolCell(props(root, { actions: { noteCards: store.noteCards }, roster: team({ exchangeTurns: { chief: [1] } }) }))
+  mount()
+  assert.deepEqual(JSON.parse(JSON.stringify(store.state)), { chief: {} })
+})
+
+const dockProps = (store, roster, { sessionId = chief.id, openState = 'open', actions = {} } = {}) => ({
+  sessionId, actions,
+  useRoster: select => select(roster),
+  useCards: select => select(store.state),
+  useSession: select => select({ openState }),
+})
+const docks = (store, roster, options) => {
+  const out = text(expand([QuestionDock(dockProps(store, roster, options)), SecretDock(dockProps(store, roster, options))]))
+  effects = []
+  return out
+}
+
+test('a card whose call is not drawn waits in the dock; a drawn one shows only at its call', () => {
+  const store = cardStore()
+  const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })
+  const root = program([call('ask_user', 'program:ptc:1'), call('request_secret', 'program:ptc:2', { args: { name: 'DEMO_TOKEN' } })])
+  assert.match(docks(store, roster), /Which draft\?.*Chief needs a key/)
+  const { out, unmount } = draw(root, store, { roster })
+  const inline = text(out)
+  assert.equal(docks(store, roster), '')
+  assert.equal(count(inline, 'Which draft?'), 1)
+  assert.equal(count(inline, 'needs a key'), 1)
+  unmount()
+  assert.match(docks(store, roster), /Which draft\?.*Chief needs a key/)
+})
+
+test('the docks hold a card back while the history loads, and keep cards without a call', () => {
+  const store = cardStore()
+  const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })
+  assert.equal(docks(store, roster, { openState: 'loading' }), '')
+  assert.equal(docks(store, roster, { openState: 'cold' }), '')
+  assert.match(docks(store, roster, { openState: 'error' }), /Which draft\?.*Chief needs a key/)
+  const free = team({ questions: { chief: question(undefined) }, secretRequests: { chief: [request(undefined)] } })
+  assert.match(docks(store, free, { openState: 'loading' }), /Which draft\?.*Chief needs a key/)
+})
+
+test('a card from an earlier part waits in the dock even when a call here has the same id', () => {
+  const store = cardStore()
+  const current = { ...chief, sessionId: 'chief-2', parts: ['chief', 'chief-2'] }
+  const roster = team({ bots: [writer, current], byId: { writer, chief: current, 'chief-2': current }, secretRequests: { chief: [request('call-1', { sessionId: 'chief' })] } })
+  const { out, unmount } = draw(call('request_secret', 'call-1', { args: { name: 'DEMO_TOKEN' } }), store, { roster, sessionId: 'chief-2' })
+  assert.doesNotMatch(text(out), /needs a key/)
+  assert.match(docks(store, roster, { sessionId: 'chief-2' }), /Chief needs a key/)
+  unmount()
+})
+
+test('a secret in a hidden turn shows in the dock instead of nowhere', () => {
+  const store = cardStore()
+  const roster = team({ exchangeTurns: { chief: [1] }, secretRequests: { chief: [request('program:ptc:1')] } })
+  const { out, unmount } = draw(program([call('request_secret', 'program:ptc:1', { args: { name: 'DEMO_TOKEN' } })]), store, { roster })
+  assert.equal(text(out), '')
+  assert.match(docks(store, roster), /Chief needs a key/)
+  unmount()
 })
 
 // #38: a PTC group round's replies vanished once the round ended.
