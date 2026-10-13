@@ -919,6 +919,7 @@ export function install(rt) {
       for await (const chunk of ctx.llm.stream({
         provider: route.provider,
         model: route.model,
+        ...(tag?.sessionId === undefined ? {} : { sessionId: tag.sessionId }),
         ...(effort === undefined ? {} : { reasoningEffort: effort }),
         system,
         messages,
