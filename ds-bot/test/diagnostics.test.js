@@ -9,6 +9,7 @@ import { cleanText, install as installDiagnostics, reportMarkdown } from '../src
 import { failureLine, install as installTurns, turnFailure } from '../src/host/turns.js'
 import { errorCode } from '../src/host/channel.js'
 import { SOURCE_KIND } from '../src/host/constants.js'
+import { fakeContext } from './fake-ctx.js'
 
 test('cleanText hides keys, tokens and the home folder', () => {
   const home = '/home/user'
@@ -36,7 +37,7 @@ test('cleanText hides standalone credentials it was never given', () => {
 function host(home, extra = {}) {
   const warnings = []
   const rt = {
-    ctx: { logger: { warn: (...args) => warnings.push(args) } },
+    ctx: { ...fakeContext(), logger: { warn: (...args) => warnings.push(args) } },
     home,
     config: {},
     state: { bots: { a: { id: 'a', name: 'Chief', model: 'deepseek/deepseek-chat' } }, mainBotIds: ['a'], rooms: {} },
@@ -73,7 +74,7 @@ test('warnings are kept, cleaned, written to the log, and read back after a rest
   assert.equal(report.entries[0].code, 'RATE_LIMIT', 'newest first')
 
   // Written as JSON lines; a new host reads them back.
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await rt.ctx.dispose()
   assert.equal(readFileSync(join(home, 'logs', 'diagnostics.jsonl'), 'utf8').trim().split('\n').length, 2)
   const again = host(home)
   assert.deepEqual((await again.diagnostics.entries()).map(entry => entry.code), ['EACCES', 'RATE_LIMIT'])

@@ -34,6 +34,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
   t.after(stop)
   assert.equal(applyResult, undefined)
   assert.deepEqual(ctx.calls, [
+    'effect ds-bot: diagnostics log',
     'effect ds-bot: state lock',
     'on llm/adapters-updated',
     'on session/event',

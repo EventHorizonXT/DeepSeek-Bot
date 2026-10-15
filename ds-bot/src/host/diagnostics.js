@@ -118,6 +118,7 @@ export function install(rt) {
   let fresh = []
   let writing = Promise.resolve()
   let fileFailed = false
+  let stopped = false
 
   const clean = text => cleanText(text, { redact: rt.redactSecrets })
 
@@ -135,7 +136,7 @@ export function install(rt) {
   let cleared = 0
 
   const append = (entry) => {
-    if (!toFile) return
+    if (!toFile || stopped) return
     writing = writing.then(async () => {
       await mkdir(dirname(logPath), { recursive: true })
       const size = await stat(logPath).then(info => info.size, () => 0)
@@ -240,10 +241,16 @@ export function install(rt) {
   async function clear() {
     cleared = Date.now()
     fresh = []
-    if (!toFile) return
+    if (!toFile || stopped) return
     writing = writing.then(() => writeFile(logPath, '', 'utf8')).catch(() => {})
     await writing
   }
+
+  ctx.effect(() => () => {
+    // Other disposers may still report failures after this one starts draining.
+    stopped = true
+    return writing
+  }, 'ds-bot: diagnostics log')
 
   Object.assign(rt, { warn, noteFailure: note, diagnostics: { report, logText, clear, entries } })
 }
